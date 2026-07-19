@@ -629,11 +629,11 @@ function estimateStationExtent(station, index) {
 /**
  * 横向上下交错式 — 文字水平排列，偶数在上、奇数在下
  */
-function buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed) {
+function buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed, isCurrent) {
     const isAbove = index % 2 === 0;
     const hasSec = !!secName;
     const gap = hasSec ? Math.max(1, secSize * 0.3) : 0;
-    const textColor = isPassed ? '#999' : line.stationNameColor;
+    const textColor = (!isDeparted && isCurrent) ? '#f00' : (isPassed ? '#999' : line.stationNameColor);
 
     // 最靠近站点的行基线
     let cnY, secY;
@@ -665,11 +665,11 @@ function buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon
 /**
  * 右上角斜45°式 — 文字沿45°方向延伸
  */
-function buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, isPassed) {
+function buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, isPassed, isCurrent) {
     const hasSec = !!secName;
     const gap = hasSec ? secSize * 0.1 : 0;
     const offset = halfIcon + 3;  // 贴近站点，向左上偏移
-    const textColor = isPassed ? '#999' : line.stationNameColor;
+    const textColor = (!isDeparted && isCurrent) ? '#f00' : (isPassed ? '#999' : line.stationNameColor);
 
     let svg = `<g transform="rotate(-45, ${cx}, ${cy})">`;
     svg += `<text text-anchor="start" x="${cx + offset}" y="${cy - offset * 0.5}" font-size="${cnSize}" font-family="${FONT_FAMILY}" fill="${textColor}">${cnName}`;
@@ -685,10 +685,10 @@ function buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, i
  * 中文在左列、英文在右列，字符自动从上到下排列
  * 上方模式使用 text-anchor: end 精确底部对齐站点上边缘
  */
-function buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, direction, isPassed) {
+function buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, direction, isPassed, isCurrent) {
     const hasSec = !!secName;
     const colGap = cnSize * 0.4;
-    const textColor = isPassed ? '#999' : line.stationNameColor;
+    const textColor = (!isDeparted && isCurrent) ? '#f00' : (isPassed ? '#999' : line.stationNameColor);
 
     // 中文列 X 坐标（左），英文列 X 坐标（右）
     const cnX = hasSec ? cx - colGap : cx;
@@ -725,7 +725,7 @@ function buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, d
  * @param {boolean} isPassed - 是否为已过站（灰色字）
  * @returns {string} SVG 文本元素字符串
  */
-function buildStationNameSvg(station, cx, cy, index, isPassed) {
+function buildStationNameSvg(station, cx, cy, index, isPassed, isCurrent) {
     const cnName = (station.name || '').trim();
     const secName = (station.secondaryName || '').trim();
     if (!cnName && !secName) return '';
@@ -736,13 +736,13 @@ function buildStationNameSvg(station, cx, cy, index, isPassed) {
 
     switch (line.nameDisplayMode) {
         case 'alternating':
-            return buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed);
+            return buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed, isCurrent);
         case 'diagonal':
-            return buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, isPassed);
+            return buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, isPassed, isCurrent);
         case 'above':
-            return buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, 'above', isPassed);
+            return buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, 'above', isPassed, isCurrent);
         case 'below':
-            return buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, 'below', isPassed);
+            return buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, 'below', isPassed, isCurrent);
         default:
             return '';
     }
@@ -1404,7 +1404,7 @@ function renderPIDSDisplay() {
             }
 
             // 站名文字（已过站用灰色）
-            const nameSvg = buildStationNameSvg(station, cx, lineCenterY, i, isPassed);
+            const nameSvg = buildStationNameSvg(station, cx, lineCenterY, i, isPassed, isCurrent);
             if (nameSvg) {
                 stationsSvg += '\n  ' + nameSvg;
             }
