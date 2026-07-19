@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_图层_2" data-name="图层 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22.07 23.32">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: none;
+      }
+
+      .cls-2 {
+        stroke: #fff;
+        stroke-miterlimit: 10;
+        stroke-width: 2px;
+      }
+    </style>
+  </defs>
+  <g id="_左行箭头" data-name="左行箭头">
+    <g>
+      <polyline class="cls-2" points="14.37 .56 7.05 11.51 14.57 22.76"/>
+      <polyline class="cls-1" points="7.32 .56 0 11.51 7.51 22.76"/>
+      <polyline class="cls-2" points="21.04 .56 13.72 11.51 21.24 22.76"/>
+    </g>
+  </g>
+</svg>

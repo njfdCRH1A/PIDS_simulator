@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地铁PIDS显示器模拟器</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="layout">
+        <!-- ========== 左侧：线路控制面板 ========== -->
+        <aside class="control-panel">
+            <div class="panel-header">
+                <h2>🎛️ 线路控制</h2>
+            </div>
+
+            <div class="panel-body">
+                <!-- 颜色 -->
+                <div class="control-group">
+                    <label>线路颜色</label>
+                    <div class="color-picker-wrapper" id="colorPreview">
+                        <input type="color" id="colorInput" value="#e94560">
+                    </div>
+                </div>
+
+                <!-- 横幅文字颜色 -->
+                <div class="control-group">
+                    <label>横幅文字颜色</label>
+                    <select id="bannerTextColorSelect" class="mode-select">
+                        <option value="#ffffff">浅色</option>
+                        <option value="#000000">深色</option>
+                    </select>
+                </div>
+
+                <!-- 站名颜色 -->
+                <div class="control-group">
+                    <label>站名颜色</label>
+                    <div class="color-picker-wrapper" id="stationNameColorPreview">
+                        <input type="color" id="stationNameColorInput" value="#ffffff">
+                    </div>
+                </div>
+
+                <!-- 运行方向 -->
+                <div class="control-group">
+                    <label>运行方向</label>
+                    <select id="directionSelect" class="mode-select">
+                        <option value="left" selected>左行（←）</option>
+                        <option value="right">右行（→）</option>
+                    </select>
+                </div>
+
+                <!-- PIDS 背景 -->
+                <div class="control-group">
+                    <label>PIDS 背景</label>
+                    <select id="pidsBgType" class="mode-select">
+                        <option value="color">纯色</option>
+                        <option value="image">纹理图片</option>
+                    </select>
+                </div>
+                <div class="control-group" id="pidsBgColorGroup">
+                    <label>背景颜色</label>
+                    <div class="color-picker-wrapper" id="pidsBgColorPreview">
+                        <input type="color" id="pidsBgColorInput" value="#ffffff">
+                    </div>
+                </div>
+                <div class="control-group pids-bg-hidden" id="pidsBgImageGroup">
+                    <label>纹理图片</label>
+                    <input type="file" id="pidsBgImageInput" accept="image/*" class="mode-select">
+                    <div id="pidsBgSizeRow" style="display:none;">
+                        <select id="pidsBgImageSize" class="mode-select">
+                            <option value="cover">拉伸填充</option>
+                            <option value="contain">完整显示</option>
+                            <option value="tile">平铺</option>
+                        </select>
+                        <button id="pidsBgClearImage" class="station-delete" style="margin-top:4px;">清除图片</button>
+                        <label style="margin-top:6px;font-size:0.75rem;color:var(--text-secondary);justify-content:flex-start;gap:6px;">
+                            透明度 <span class="value-label" id="pidsBgOpacityValue">100</span>%
+                        </label>
+                        <input type="range" id="pidsBgOpacityInput" class="slider" min="0" max="100" value="50">
+                    </div>
+                </div>
+
+                <!-- 时间控制 -->
+                <div class="control-group">
+                    <label style="justify-content:flex-start;gap:8px;">
+                        <input type="checkbox" id="useSystemTimeCheck" checked>
+                        使用系统时间
+                    </label>
+                    <div class="time-inputs" id="timeInputs">
+                        <div class="time-date-row">
+                            <input type="number" id="timeYear" class="time-num" min="2000" max="2099" disabled>
+                            <span class="time-sep">年</span>
+                            <input type="number" id="timeMonth" class="time-num time-num-short" min="1" max="12" disabled>
+                            <span class="time-sep">月</span>
+                            <input type="number" id="timeDay" class="time-num time-num-short" min="1" max="31" disabled>
+                            <span class="time-sep">日</span>
+                            <span id="timeDayOfWeek" class="time-dow">--</span>
+                        </div>
+                        <div class="time-hm-row">
+                            <input type="number" id="timeHour" class="time-num time-num-short" min="0" max="23" disabled>
+                            <span class="time-sep-colon">:</span>
+                            <input type="number" id="timeMinute" class="time-num time-num-short" min="0" max="59" disabled>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 长度 -->
+                <div class="control-group">
+                    <label>线路显示长度 <span class="value-label" id="lengthValue">100</span></label>
+                    <input type="range" id="lengthInput" class="slider" min="10" max="300" value="300">
+                </div>
+
+                <!-- 粗细 -->
+                <div class="control-group">
+                    <label>线路粗细 <span class="value-label" id="strokeValue">5</span></label>
+                    <input type="range" id="strokeInput" class="slider" min="1" max="20" value="5">
+                </div>
+
+                <!-- 位置 -->
+                <div class="control-group">
+                    <label>线路上下位置 <span class="value-label" id="positionValue">0.50</span></label>
+                    <input type="range" id="positionInput" class="slider" min="0" max="1" step="0.05" value="0.5">
+                </div>
+
+                <!-- 列车编组 -->
+                <div class="control-group">
+                    <label>列车编组</label>
+                    <textarea id="trainFormationInput" class="train-formation-input" rows="5" placeholder="车厢号,类型&#10;1,1&#10;2,0&#10;3,0&#10;4,0&#10;5,0&#10;6,-1"></textarea>
+                    <span style="font-size:0.68rem;color:var(--text-muted);">每行: 车厢号,类型 (1=朝右车头, -1=朝左车头, 0=中间车)</span>
+                </div>
+
+                <!-- 停止位置 -->
+                <div class="control-group">
+                    <label>停止位置</label>
+                    <select id="stopPositionSelect" class="mode-select">
+                        <option value="front">前部对标</option>
+                        <option value="center" selected>居中对标</option>
+                        <option value="rear">尾部对标</option>
+                    </select>
+                </div>
+
+                <!-- 贴图尺寸 -->
+                <div class="control-group">
+                    <label>站点尺寸 <span class="value-label" id="iconSizeValue">4</span></label>
+                    <input type="range" id="iconSizeInput" class="slider" min="2" max="10" value="4">
+                </div>
+
+                <!-- 箭头高度 -->
+                <div class="control-group">
+                    <label>箭头高度 <span class="value-label" id="arrowScaleHValue">1.0</span></label>
+                    <input type="range" id="arrowScaleHInput" class="slider" min="0.5" max="3" step="0.1" value="1">
+                </div>
+
+                <!-- 箭头宽度 -->
+                <div class="control-group">
+                    <label>箭头宽度 <span class="value-label" id="arrowScaleWValue">1.0</span></label>
+                    <input type="range" id="arrowScaleWInput" class="slider" min="0.5" max="3" step="0.1" value="1">
+                </div>
+
+                <!-- 箭头颜色 -->
+                <div class="control-group">
+                    <label>箭头颜色</label>
+                    <div class="color-picker-wrapper" id="arrowColorPreview">
+                        <input type="color" id="arrowColorInput" value="#ffffff">
+                    </div>
+                </div>
+
+                <!-- 箭头闪烁时间 -->
+                <div class="control-group">
+                    <label>箭头闪烁时间 <span class="value-label" id="arrowBlinkValue">300</span> ms</label>
+                    <input type="number" id="arrowBlinkInput" class="arrow-blink-input" min="100" max="2000" step="50" value="300">
+                </div>
+
+                <!-- 箭头描边粗细 -->
+                <div class="control-group">
+                    <label>箭头描边粗细 <span class="value-label" id="arrowStrokeWidthValue">4</span></label>
+                    <input type="range" id="arrowStrokeWidthInput" class="slider" min="1" max="12" value="4">
+                </div>
+
+                <!-- 站名显示模式 -->
+                <div class="control-group">
+                    <label>站名显示模式</label>
+                    <select id="nameModeSelect" class="mode-select">
+                        <option value="alternating">横向上下交错式</option>
+                        <option value="diagonal">右上角斜45°式</option>
+                        <option value="above">站点上方垂直式</option>
+                        <option value="below">站点下方垂直式</option>
+                    </select>
+                </div>
+
+                <!-- 站名字号 -->
+                <div class="control-group">
+                    <label>站名字号 <span class="value-label" id="nameFontSizeValue">4</span></label>
+                    <input type="range" id="nameFontSizeInput" class="slider" min="2" max="8" value="4">
+                </div>
+
+                <!-- 导出 / 导入 -->
+                <div class="control-group">
+                    <button id="exportConfigBtn" class="btn-reset-station" style="width:100%;">📤 导出配置</button>
+                    <button id="importConfigBtn" class="btn-reset-station" style="width:100%;margin-top:6px;">📥 导入配置</button>
+                    <input type="file" id="importConfigInput" accept=".json" style="display:none;">
+                </div>
+
+                <!-- 重置线路 -->
+                <div class="control-group">
+                    <button id="resetLineBtn" class="btn-reset-station" style="width:100%;">🔄 重置线路</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ========== 右侧：PIDS + 车站编辑 ========== -->
+        <main class="right-content">
+            <!-- 上部：PIDS 显示区 -->
+            <section class="pids-section">
+                <div class="pids-display-wrapper">
+                    <div class="pids-display" id="pidsDisplay">
+                        <div class="pids-bg-layer" id="pidsBgLayer"></div>
+                        <div class="pids-content">
+                            <div class="pids-banner" id="pidsBanner">
+                                <!-- 横幅 SVG 将由 JS 动态生成 -->
+                            </div>
+                            <div class="pids-line-track" id="pidsLineTrack">
+                                <!-- 线路 SVG 将在这里渲染 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 画面切换控制栏 -->
+            <div class="pids-playback-bar" id="pidsPlaybackBar">
+                <button id="btnGoToStart" class="btn-playback" title="回到起点站">⏮ 起点</button>
+                <button id="btnPrevStep" class="btn-playback" title="上一步">|< 上一步</button>
+                <button id="btnAutoRun" class="btn-playback" title="自动运行">▶ 自动运行</button>
+                <button id="btnNextStep" class="btn-playback" title="下一步">下一步 >|</button>
+            </div>
+
+            <!-- 下部：车站编辑区 -->
+            <section class="station-editor" id="stationEditor">
+                <div class="editor-header">
+                    <h3>🚉 车站编辑区</h3>
+                    <span class="editor-hint">在此添加和管理车站站点</span>
+                    <div class="editor-header-actions">
+                        <button id="addStationBtn" class="btn-add-station">➕ 添加车站</button>
+                        <button id="reverseStationBtn" class="btn-reset-station">🔁 一键反向</button>
+                        <button id="resetStationBtn" class="btn-reset-station">🔄 重置车站</button>
+                    </div>
+                </div>
+                <div class="editor-body">
+                    <div class="station-list" id="stationList">
+                        <!-- 车站列表将动态生成 -->
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
