@@ -130,4 +130,4 @@ PIDS_simulator/
 
 ## 许可证
 
-MIT License
+本软件仅供个人使用，禁止商业用途。详见 [LICENSE](LICENSE) 文件。
