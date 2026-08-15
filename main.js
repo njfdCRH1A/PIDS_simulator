@@ -24,7 +24,14 @@ const CONFIG = {
     defaultNameDisplayMode: 'alternating',
     defaultBannerTextColor: '#ffffff',
     defaultStationNameColor: '#ffffff',
-    defaultTrainFormation: '1,1\n2,0\n3,0\n4,0\n5,0\n6,-1',
+    defaultTrainCars: [
+        { number: 1, isHead: true },
+        { number: 2, isHead: false },
+        { number: 3, isHead: false },
+        { number: 4, isHead: false },
+        { number: 5, isHead: false },
+        { number: 6, isHead: true }
+    ],
     defaultStopPosition: 'center',
     defaultDirection: 'left',
     defaultArrowScaleW: 1.0,
@@ -58,7 +65,7 @@ const line = {
     nameDisplayMode: CONFIG.defaultNameDisplayMode,
     bannerTextColor: CONFIG.defaultBannerTextColor,
     stationNameColor: CONFIG.defaultStationNameColor,
-    trainFormation: CONFIG.defaultTrainFormation,
+    trainCars: CONFIG.defaultTrainCars.map(c => ({ ...c })),
     stopPosition: CONFIG.defaultStopPosition,
     direction: CONFIG.defaultDirection,
     arrowScaleW: CONFIG.defaultArrowScaleW,
@@ -89,6 +96,22 @@ const ARROW_ANIM_DELAY = 300;        // 箭头动画帧切换间隔（毫秒）
 let currentStationBlink = true;      // 当前站黄色闪烁状态（on/off）
 let currentStationBlinkTimer = null; // 当前站闪烁定时器
 const CURRENT_STATION_BLINK_DELAY = 500; // 当前站闪烁间隔（毫秒）
+
+// ========== 本侧开门停站画面状态 ==========
+let stopDisplayKind = null;        // 停站开门画面类型: 'this' | 'opposite' | null
+let thisSidePanelMode = 'station'; // 本侧开门右侧面板: 'station'(本站/站名) | 'date'(日期)
+let thisSidePanelTimer = null;     // 右侧面板 10s/2s 循环定时器（setTimeout 链）
+let doorOpenAmount = 0;            // 车门开门进度 0(关)~1(开)
+let doorAnimTimer = null;          // 车门开门动画定时器
+let doorArrowProgress = 0;         // 绿色上箭头行程 0(底)~1(顶)
+let doorArrowTimer = null;         // 绿色上箭头动画定时器
+let doorArrowActive = false;       // 门全开后是否显示绿色上箭头
+const THIS_SIDE_STATION_MS = 10000; // 「本站/站名」显示时长（毫秒）
+const THIS_SIDE_DATE_MS = 2000;     // 「日期」显示时长（毫秒）
+const DOOR_ANIM_DELAY = 50;         // 开门动画步进间隔（毫秒）
+const DOOR_OPEN_STEPS = 30;         // 开门总步数（约 1.5 秒开完）
+const DOOR_ARROW_DELAY = 80;        // 绿色上箭头步进间隔（毫秒）
+const DOOR_ARROW_STEPS = 20;        // 上箭头单趟步数（约 1.6 秒一趟）
 
 // ========== 时间状态 ==========
 const DAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
@@ -234,6 +257,43 @@ function scheduleSave() {
 }
 
 /**
+ * migrateTrainCars - 迁移旧版列车编组字符串到车厢数组
+ *
+ * 旧版 trainFormation 为 "车厢号,类型" 每行一条的字符串，
+ * 其中类型 1=朝右车头, -1=朝左车头, 0=中间车。
+ * 新版 line.trainCars 为 [{ number, isHead }] 数组，
+ * 车头方向改由列车编组位置 + 运行方向自动决定，故 isHead = 类型非 0。
+ * 若新版字段已存在则不做任何事。
+ *
+ * 依赖: line (全局), CONFIG.defaultTrainCars
+ */
+function migrateTrainCars() {
+    // 旧版 trainFormation 字符串存在 → 迁移（覆盖默认/已有 trainCars）
+    // 判断依据：旧数据经 Object.assign 后 line.trainFormation 为非空字符串
+    if (typeof line.trainFormation === 'string' && line.trainFormation.trim()) {
+        const parsed = [];
+        line.trainFormation.split('\n').forEach(rawLine => {
+            const parts = rawLine.trim().split(',');
+            if (parts.length < 2) return;
+            const number = parseInt(parts[0], 10);
+            const type = parseInt(parts[1], 10);
+            if (isNaN(number)) return;
+            parsed.push({ number: number, isHead: type !== 0 });
+        });
+        if (parsed.length > 0) {
+            line.trainCars = parsed;
+            delete line.trainFormation;  // 迁移成功后清除旧字段，避免再次序列化
+            return;
+        }
+    }
+
+    // 无旧数据 → 兜底默认编组（仅当 trainCars 缺失或为空时）
+    if (!Array.isArray(line.trainCars) || line.trainCars.length === 0) {
+        line.trainCars = CONFIG.defaultTrainCars.map(c => ({ ...c }));
+    }
+}
+
+/**
  * loadState - 从 localStorage 恢复状态
  *
  * 恢复后自动剥离 pidsBackground.image 字段——
@@ -263,6 +323,8 @@ function loadState() {
             if (line.length === 100 || line.length === 280) {
                 line.length = CONFIG.defaultLength;
             }
+            // 迁移旧版 trainFormation 字符串 → trainCars 数组
+            migrateTrainCars();
         }
         if (state.stations) stations = state.stations.slice();
         if (state.stationCounter !== undefined) stationCounter = state.stationCounter;
@@ -275,6 +337,10 @@ function loadState() {
                 if (tl.cnFontSize == null) tl.cnFontSize = 3.0;
                 if (tl.enFontSize == null) tl.enFontSize = 2.0;
             });
+            // 迁移：旧数据中缺少 doorSide 字段时默认为本侧开门
+            if (s.doorSide === undefined) s.doorSide = true;
+            // 迁移：旧数据中缺少 isUnderground 字段时默认为地上站
+            if (s.isUnderground === undefined) s.isUnderground = false;
         });
         if (state.timeState) Object.assign(timeState, state.timeState);
         if (state.pidsBackground) {
@@ -353,9 +419,16 @@ function importConfig(file) {
 
             // 应用线路配置
             Object.assign(line, data.line);
+            // 迁移旧版 trainFormation 字符串 → trainCars 数组
+            migrateTrainCars();
 
             // 应用车站
             stations = data.stations.slice();
+            // 迁移：确保导入数据中所有车站都有 doorSide 字段
+            stations.forEach(s => {
+                if (s.doorSide === undefined) s.doorSide = true;
+                if (s.isUnderground === undefined) s.isUnderground = false;
+            });
             stationCounter = data.stationCounter || stations.length;
 
             // 应用时间状态
@@ -373,8 +446,8 @@ function importConfig(file) {
                 }
             }
 
-            // 重置画面状态
-            currentStationIndex = -1;
+            // 重置画面状态，自动定位到第一个站
+            currentStationIndex = (stations.length > 0) ? 0 : -1;
             isDeparted = false;
             transferToggle = false;
             currentStationBlink = true;
@@ -402,7 +475,7 @@ function importConfig(file) {
             nameModeSelect.value = line.nameDisplayMode;
             nameFontSizeInput.value = line.nameFontSize;
             nameFontSizeValue.textContent = line.nameFontSize;
-            trainFormationInput.value = line.trainFormation;
+            renderTrainCarList();
             stopPositionSelect.value = line.stopPosition;
             directionSelect.value = line.direction;
             arrowScaleWInput.value = line.arrowScaleW;
@@ -474,7 +547,8 @@ const iconSizeValue = document.getElementById('iconSizeValue');
 const nameModeSelect = document.getElementById('nameModeSelect');
 const nameFontSizeInput = document.getElementById('nameFontSizeInput');
 const nameFontSizeValue = document.getElementById('nameFontSizeValue');
-const trainFormationInput = document.getElementById('trainFormationInput');
+const trainCarList = document.getElementById('trainCarList');
+const addTrainCarBtn = document.getElementById('addTrainCarBtn');
 const stopPositionSelect = document.getElementById('stopPositionSelect');
 const directionSelect = document.getElementById('directionSelect');
 const arrowScaleWInput = document.getElementById('arrowScaleWInput');
@@ -725,7 +799,7 @@ function buildVerticalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, d
  * @param {boolean} isPassed - 是否为已过站（灰色字）
  * @returns {string} SVG 文本元素字符串
  */
-function buildStationNameSvg(station, cx, cy, index, isPassed, isCurrent) {
+function buildStationNameSvg(station, cx, cy, index, isPassed, isCurrent, nameMode) {
     const cnName = (station.name || '').trim();
     const secName = (station.secondaryName || '').trim();
     if (!cnName && !secName) return '';
@@ -734,7 +808,7 @@ function buildStationNameSvg(station, cx, cy, index, isPassed, isCurrent) {
     const secSize = cnSize / 2;
     const halfIcon = line.iconSize / 2;
 
-    switch (line.nameDisplayMode) {
+    switch (nameMode || line.nameDisplayMode) {
         case 'alternating':
             return buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed, isCurrent);
         case 'diagonal':
@@ -868,17 +942,19 @@ function applyPidsBackground() {
  * @param  {number} cx   - 图标中心 X
  * @param  {number} cy   - 图标中心 Y
  * @param  {number} size - 图标尺寸
+ * @param  {string} [innerFill] - 可选：内圆填充色（默认 #fff）
  * @returns {string} SVG g 元素字符串（含 3 个 path）
  */
-function buildTransferIcon(cx, cy, size) {
+function buildTransferIcon(cx, cy, size, innerFill) {
     // 内联 transfer.svg 路径 (viewBox="0 0 40 40")，等比缩放至 iconSize
     // 避免外部 <image> 加载失败导致图标隐形、与换乘框不同步
     const s = size / 40;
     const x = cx - size / 2;
     const y = cy - size / 2;
+    const inner = innerFill || '#fff';
     return `<g transform="translate(${x}, ${y}) scale(${s})">
     <path fill="#231815" d="M20,0c11.05,0,20,8.95,20,20,0,10.92-8.76,19.8-19.63,20h-.37c-2.76,0-5.38-.55-7.77-1.56C5.04,35.4,0,28.29,0,20,0,9.08,8.76.2,19.63,0h.37Z"/>
-    <path fill="#fff" d="M20,4.44c-8.56,0-15.56,7-15.56,15.56,0,8.56,7,15.56,15.56,15.56,8.56,0,15.56-7,15.56-15.56,0-8.56-7-15.56-15.56-15.56Z"/>
+    <path fill="${inner}" d="M20,4.44c-8.56,0-15.56,7-15.56,15.56,0,8.56,7,15.56,15.56,15.56,8.56,0,15.56-7,15.56-15.56,0-8.56-7-15.56-15.56-15.56Z"/>
     <path fill="#231815" d="M23.34,12.81l.06-3.63s0-.19.37-.27c.22-.03.44.03.61.16l6.26,4.65c.34.19.55.53.57.91,0,.33-.16.64-.43.82l-6.45,4.31c-.24.08-.5.1-.75.06-.37-.08-.37-.36-.37-.36l.07-3.39-6.19-.1s-4.9.58-4.93,2.42c0,0,.18-5.75,5.14-5.67M16.76,27.32l-.06,3.63s-.07.22-.47.27c-.18.02-.35-.03-.49-.15l-6.26-4.65c-.34-.19-.56-.53-.58-.92,0-.33.16-.64.44-.83l6.44-4.31c.19-.1.42-.12.63-.06.45.13.46.36.46.36l-.06,3.4,6.23.11s4.9-.58,4.93-2.42c0,0-.18,5.77-5.14,5.67"/>
   </g>`;
 }
@@ -1031,9 +1107,11 @@ function buildTransferLineFrame(lineData, x, y, frameW, frameH, isPassed) {
  * @param  {number} cy        - 站点圆圈中心 Y
  * @param  {number} nameIndex - 站名逻辑索引（用于 alternating 奇偶判断）
  * @param  {boolean} isPassed - 是否为已过站（灰色配色）
+ * @param  {string} [nameMode] - 可选：覆盖站名排布模式（默认 line.nameDisplayMode）
+ * @param  {boolean} [narrow] - 可选：本侧开门窄面板场景；2 条换乘时单列纵向（①/②），3 条及以上每行最多 2 列（末行居中）
  * @returns {string} SVG 片段字符串
  */
-function buildTransferFrames(station, cx, cy, nameIndex, isPassed) {
+function buildTransferFrames(station, cx, cy, nameIndex, isPassed, nameMode, narrow) {
     const lines = station.transferLines;
     if (!lines || lines.length === 0) return '';
 
@@ -1047,9 +1125,9 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed) {
     const frameW = Math.max(...sizes.map(s => s.w));  // 统一宽度 = 最宽框
     const frameHs = sizes.map(s => s.h);               // 各框各自高度
 
-    // 网格布局：每行最多 2 列，末行不足 2 个时居中
-    const COLS = Math.min(count, 2);
-    const ROWS = Math.ceil(count / 2);
+    // 布局：本侧开门窄面板 2 条换乘时单列纵向（①/②）；其余每行最多 2 列，末行居中
+    const COLS = (narrow && count === 2) ? 1 : Math.min(count, 2);
+    const ROWS = Math.ceil(count / COLS);
 
     // 每行高度 = 该行最高框
     const rowHeights = [];
@@ -1067,7 +1145,7 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed) {
     let tfX, tfY, availTop, availBottom, scaleFromBottom;
     const MARGIN = 0.5;
 
-    switch (line.nameDisplayMode) {
+    switch (nameMode || line.nameDisplayMode) {
         case 'alternating': {
             const cnName = (station.name || '').trim();
             const secName = (station.secondaryName || '').trim();
@@ -1190,7 +1268,7 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed) {
  * @param  {number}  h        - 箭头高度
  * @param  {string}  direction - 运行方向 'left' | 'right'
  * @param  {number}  frame    - 动画帧 0/1/2
- * @param  {boolean} isPassed - 是否为已过段（灰色箭头）
+ * @param  {boolean} isPassed - 已过段标识（保留作签名兼容，不再用于灰化箭头）
  * @returns {string} SVG g 元素字符串
  */
 function buildArrowSvg(cx, cy, w, h, direction, frame, isPassed) {
@@ -1199,19 +1277,20 @@ function buildArrowSvg(cx, cy, w, h, direction, frame, isPassed) {
     const sy = h / VB_H;
     const x = cx - w / 2;
     const y = cy - h / 2;
-    const arrowStroke = isPassed ? '#999' : line.arrowColor;
+    // 所有状态统一使用箭头颜色，已过段不再灰化
+    const arrowStroke = line.arrowColor;
 
-    // 左行箭头 chevron（指向左 ←），按从右到左排列，间距 12 单位
+    // 左行箭头（指向左 ←），带凹口块状，3 段按右→左生长
     const LEFT_PATHS = [
-        "24,0.56 18,11.51 24,22.76",    // [0] 右 chevron（tip=18, sides=24）
-        "18,0.56 12,11.51 18,22.76",    // [1] 中 chevron（tip=12, sides=18）
-        "12,0.56 6,11.51 12,22.76"      // [2] 左 chevron（tip=6, sides=12）
+        "50,2 42,2 34,11.5 42,21 50,21 42,11.5 50,2",    // [0] 右
+        "33,2 25,2 17,11.5 25,21 33,21 25,11.5 33,2",    // [1] 中
+        "16,2 8,2 0,11.5 8,21 16,21 8,11.5 16,2"         // [2] 左（尖端）
     ];
-    // 右行箭头 chevron（指向右 →），按从左到右排列，间距 12 单位
+    // 右行箭头（指向右 →），带凹口块状，3 段按左→右生长
     const RIGHT_PATHS = [
-        "4,0.56 10,11.51 4,22.76",      // [0] 左 chevron（tip=10, sides=4）
-        "22,0.56 28,11.51 22,22.76",    // [1] 中 chevron（tip=28, sides=22）
-        "40,0.56 46,11.51 40,22.76"     // [2] 右 chevron（tip=46, sides=40）
+        "0,2 8,2 16,11.5 8,21 0,21 8,11.5 0,2",          // [0] 左
+        "17,2 25,2 33,11.5 25,21 17,21 25,11.5 17,2",    // [1] 中
+        "34,2 42,2 50,11.5 42,21 34,21 42,11.5 34,2"     // [2] 右（尖端）
     ];
 
     // 左行 → 使用左指路径；右行 → 使用右指路径
@@ -1224,10 +1303,10 @@ function buildArrowSvg(cx, cy, w, h, direction, frame, isPassed) {
 
     let svg = `<g transform="translate(${x}, ${y}) scale(${sx}, ${sy})">`;
     for (let pi = 0; pi < 3; pi++) {
-        const strokeAttr = visible.has(pi)
-            ? `stroke="${arrowStroke}" stroke-width="${line.arrowStrokeWidth}" stroke-miterlimit="10"`
-            : '';
-        svg += `\n  <polyline fill="none" ${strokeAttr} points="${paths[pi]}"/>`;
+        const drawAttr = visible.has(pi)
+            ? `fill="${arrowStroke}" stroke="${arrowStroke}" stroke-width="0.5" stroke-linejoin="miter"`
+            : 'fill="none" stroke="none"';
+        svg += `\n  <polygon ${drawAttr} points="${paths[pi]}"/>`;
     }
     svg += `\n</g>`;
     return svg;
@@ -1250,9 +1329,714 @@ function isStationPassed(logicalIndex) {
     return logicalIndex < currentStationIndex;
 }
 
-function renderPIDSDisplay() {
+/**
+ * buildDoorGraphic - 生成对侧开门画面的车门 SVG 片段
+ *
+ * 车门由 doorl.svg（左门扇，圆角在左）与 doorr.svg（右门扇，180° 旋转）拼合，
+ * 内联路径数据避免外部 <image> 加载失败导致车门隐形。
+ * 原始两扇各 31×51（拼合后 62×51），按 doorH 等比缩放。
+ *
+ * @param  {number} x     - 车门左上角 X（viewBox 单位）
+ * @param  {number} y     - 车门左上角 Y
+ * @param  {number} doorH - 车门高度
+ * @param  {number} [openAmount] - 开门进度 0(关)~1(开)，两门扇向外滑开；缺省/0 为闭合
+ * @returns {string} SVG g 元素字符串
+ */
+function buildDoorGraphic(x, y, doorH, openAmount) {
+    const s = doorH / 51;
+    const leafPath = 'M5.5.5h25v50H5.5c-2.76,0-5-2.24-5-5V5.5C.5,2.74,2.74.5,5.5.5Z';
+    const windowRect = '<rect x="8" y="7.54" width="15" height="20" rx="3" ry="3" fill="#000"/>';
+    // 开门动画：openAmount 0(关)~1(开)，两门扇向外滑开（原始 SVG 坐标单位）
+    const slide = (openAmount || 0) * 10;
+    const leaf = (extraTransform) => `<g transform="${extraTransform}">
+    <path d="${leafPath}" fill="#fff" stroke="#000" stroke-width="1" stroke-miterlimit="10"/>
+    ${windowRect}
+  </g>`;
+    // 左门扇向左滑（屏幕 -slide）；右门扇在镜像组内向左滑 → 屏幕 +slide
+    return `<g transform="translate(${x}, ${y}) scale(${s})">
+    ${leaf(`translate(${-slide}, 0)`)}
+    <g transform="translate(62,0) scale(-1,1)">
+      ${leaf(`translate(${-slide}, 0)`)}
+    </g>
+  </g>`;
+}
+
+/**
+ * buildDoorArrowSvg - 生成两门之间绿色上箭头 SVG 片段
+ *
+ * 本侧开门门全开后显示：箭头在两门间隙内自底向上循环移动，指示乘客由此上车。
+ * 实心绿色上指箭头，局部坐标高度 12、宽度 8，中心位于 (cx, cy)。
+ *
+ * @param  {number} cx - 箭头中心 X（两门间隙中心）
+ * @param  {number} cy - 箭头中心 Y（随行程 doorArrowProgress 自底向顶）
+ * @param  {number} [opacity] - 可选：透明度 0~1（行程两端淡入淡出用）；缺省为 1
+ * @returns {string} SVG g 元素字符串
+ */
+function buildDoorArrowSvg(cx, cy, opacity) {
+    const color = '#00c853';  // 绿色（Material Green 600），深色背景上清晰
+    // 局部坐标：尖端朝上，头部三角 y:-6..2，尾部杆 y:2..6
+    const d = 'M0,-6 L4,2 L1.5,2 L1.5,6 L-1.5,6 L-1.5,2 L-4,2 Z';
+    const op = (opacity === undefined) ? 1 : opacity;
+    return `<g transform="translate(${cx}, ${cy})" opacity="${op.toFixed(2)}">
+    <path d="${d}" fill="${color}"/>
+  </g>`;
+}
+
+/**
+ * buildProhibitionIcon - 生成禁止（禁入）图标 SVG 片段
+ *
+ * 经典禁止标志：红色圆环 + 红色斜杠，白色内底。
+ * 用于对侧开门画面，叠在车门上表示"本侧不开门"。
+ *
+ * @param  {number} cx - 圆心 X
+ * @param  {number} cy - 圆心 Y
+ * @param  {number} r  - 半径
+ * @returns {string} SVG g 元素字符串
+ */
+function buildProhibitionIcon(cx, cy, r) {
+    const sw = Math.max(1.5, r * 0.16);
+    const slash = r * 0.7;
+    return `<g opacity="0.75">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#f00" stroke-width="${sw}"/>
+    <line x1="${cx - slash}" y1="${cy - slash}" x2="${cx + slash}" y2="${cy + slash}" stroke="#f00" stroke-width="${sw}"/>
+  </g>`;
+}
+
+/**
+ * renderDoorSideDisplay - 对侧开门停站特殊画面
+ *
+ * 当列车停靠在非本侧开门车站时：
+ *   - 线路长度缩短为 150
+ *   - 仅显示当前站附近的 5 个车站
+ *   - 线路分段着色（已过灰色 / 未过线路色）
+ *   - 非端头站方向显示延伸线（"--"）
+ *   - 左侧显示车门（doorl+doorr 拼合）+ 闪烁禁止图标，下方标注"对侧开门"
+ *   - 右侧显示当前时间（HH:MM / YYYYMMDD / 星期X）
+ *   - 支持左行/右行双向
+ *   - 线路垂直位置固定居中（positionY=0.5），站名样式固定为横向上下交错式（alternating）
+ *
+ * 依赖: line, stations, currentStationIndex (全局), FONT_FAMILY (全局),
+ *       VIEWBOX_HEIGHT (全局), isStationPassed()
+ */
+function renderDoorSideDisplay() {
+    console.log('[PIDS] renderDoorSideDisplay 开始执行, 方向:', line.direction);
+    try {
     const viewBoxWidth = 300;
+    const shortLength = 120;    // 停站画面线路长度（决定车站间距，5 站时间距 30）
+    const rectX = (viewBoxWidth - shortLength) / 2;
+    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - line.strokeWidth) + line.strokeWidth / 2; // 停站画面线路固定居中 (0.5)
+    const iconSize = line.iconSize;
+    const strokeW = Math.max(0.5, iconSize / 10);
+    const isLeftDir = (line.direction === 'left');
+
+    // --- 计算要显示的 5 个车站（以当前站为中心） ---
+    const N = stations.length;
+    let startIdx, endIdx;
+    if (N <= 5) {
+        startIdx = 0;
+        endIdx = N - 1;
+    } else {
+        startIdx = Math.max(0, currentStationIndex - 2);
+        endIdx = startIdx + 4;
+        if (endIdx >= N) {
+            endIdx = N - 1;
+            startIdx = Math.max(0, endIdx - 4);
+        }
+    }
+
+    const visibleIndices = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+        visibleIndices.push(i);
+    }
+    const V = visibleIndices.length;
+
+    // 视觉位置 → 逻辑站索引（左行时反转）
+    function visToIdx(vi) {
+        return isLeftDir ? visibleIndices[V - 1 - vi] : visibleIndices[vi];
+    }
+
+    const firstCx = rectX;
+    const lastCx = rectX + shortLength;
+    const spacing = V > 1 ? (lastCx - firstCx) / (V - 1) : 0;
+    const extLen = V > 1 ? spacing : 8;   // 两侧线路超出长度 = 车站间距
+
+    // --- 端头站判定（方向感知） ---
+    // 右行→: 左端头=索引0可见, 右端头=索引N-1可见
+    // 左行←: 左端头=索引N-1可见, 右端头=索引0可见
+    const leftTerminal  = isLeftDir ? (endIdx === N - 1) : (startIdx === 0);
+    const rightTerminal = isLeftDir ? (startIdx === 0) : (endIdx === N - 1);
+
+    // 延伸段颜色（延伸方向指向已过站→灰, 指向未过站→线路色）
+    // 右行→: 左延=已过(灰), 右延=未过(线路色)
+    // 左行←: 左延=未过(线路色), 右延=已过(灰)
+    const leftExtColor  = isLeftDir ? line.color : '#999';
+    const rightExtColor = isLeftDir ? '#999' : line.color;
+
+    // --- 线路分段 ---
+    const lineY = lineCenterY - line.strokeWidth / 2; // 与 lineCenterY 一致，固定居中
+    const lineH = line.strokeWidth;
+    let lineSvg = '';
+
+    // 左延伸段
+    if (!leftTerminal && extLen > 0) {
+        const extLeftX = rectX - extLen;
+        lineSvg += `\n  <rect x="${extLeftX}" y="${lineY}" width="${extLen}" height="${lineH}" fill="${leftExtColor}" rx="2"/>`;
+    }
+
+    // 站间段：逐段着色
+    // 段颜色由该段在行进方向上"更早"的那个站决定
+    // 右行→: 左站索引更小→更早, 检查左站 isStationPassed
+    // 左行←: 右站索引更小→更早, 检查右站 isStationPassed
+    for (let vi = 0; vi < V - 1; vi++) {
+        const segX = firstCx + vi * spacing;
+        const leftIdx = visToIdx(vi);
+        const rightIdx = visToIdx(vi + 1);
+        // 逻辑上索引更小的站是"更早经过"的站
+        const earlierIdx = isLeftDir ? rightIdx : leftIdx;
+        const segColor = isStationPassed(earlierIdx) ? '#999' : line.color;
+        lineSvg += `\n  <rect x="${segX}" y="${lineY}" width="${spacing}" height="${lineH}" fill="${segColor}" rx="2"/>`;
+    }
+
+    // 右延伸段
+    if (!rightTerminal && extLen > 0) {
+        lineSvg += `\n  <rect x="${lastCx}" y="${lineY}" width="${extLen}" height="${lineH}" fill="${rightExtColor}" rx="2"/>`;
+    }
+
+    // 兜底：单站且无延伸时显示短线路
+    if (lineSvg === '') {
+        lineSvg = `<rect x="${rectX}" y="${lineY}" width="${shortLength}" height="${lineH}" fill="${line.color}" rx="2"/>`;
+    }
+
+    // --- 预计算到站时间（按逻辑索引序，与视觉方向无关） ---
+    const arrivalTimes = new Array(N).fill(-1);
+    {
+        let cumulative = 0;
+        let foundCurrent = false;
+        for (let i = 0; i < N; i++) {
+            if (i === currentStationIndex) {
+                foundCurrent = true;
+                arrivalTimes[i] = 0;
+                cumulative = stations[i].timeToNext || 0;
+            } else if (foundCurrent) {
+                arrivalTimes[i] = cumulative;
+                cumulative += stations[i].timeToNext || 0;
+            }
+        }
+    }
+
+    // --- 车站 ---
+    let stationsSvg = '';
+
+    for (let vi = 0; vi < V; vi++) {
+        const i = visToIdx(vi);
+        const station = stations[i];
+        const cx = V > 1 ? firstCx + spacing * vi : (rectX + shortLength / 2);
+        const isPassed = isStationPassed(i);
+        const isCurrentSt = (i === currentStationIndex);
+
+        const x = cx - iconSize / 2 + strokeW / 2;
+        const y = lineCenterY - iconSize / 2 + strokeW / 2;
+        const renderSize = iconSize - strokeW;
+
+        const stationStroke = isPassed ? '#999' : line.color;
+        const stationFill = isPassed ? '#f0f0f0'
+            : (isCurrentSt ? (currentStationBlink ? '#FFD700' : '#fff') : '#fff');
+        const stationGlow = (isCurrentSt && !isPassed) ? ` filter="url(#glow)"` : '';
+
+        // 换乘站图标
+        const isTransferStation = station.type === '换乘站'
+            && station.transferLines && station.transferLines.length > 0;
+        // 停站中当前站为换乘站时：保持显示换乘图标，填充底色黄色闪烁
+        const isCurrentTransfer = isTransferStation && isCurrentSt && !isPassed;
+        const showTransfer = isTransferStation && transferToggle && !isPassed;
+        const showPassedTransfer = isTransferStation && isPassed;
+
+        if (isCurrentTransfer) {
+            stationsSvg += '\n  ' + buildTransferIcon(cx, lineCenterY, iconSize, currentStationBlink ? '#FFD700' : '#fff');
+        } else if (showTransfer) {
+            stationsSvg += '\n  ' + buildTransferIcon(cx, lineCenterY, iconSize);
+        } else if (showPassedTransfer) {
+            stationsSvg += '\n  ' + buildTransferIconGray(cx, lineCenterY, iconSize);
+        } else {
+            stationsSvg += `
+  <rect x="${x}" y="${y}" width="${renderSize}" height="${renderSize}" rx="${renderSize / 2}" ry="${renderSize / 2}" fill="${stationFill}" stroke="${stationStroke}" stroke-width="${strokeW}"${stationGlow} />`;
+            // 到站时间（未过站且非当前站）
+            if (arrivalTimes[i] > 0 && !isCurrentSt) {
+                const timeFontSize = Math.max(1.2, iconSize * 0.5);
+                stationsSvg += `
+  <text x="${cx}" y="${lineCenterY}" text-anchor="middle" dominant-baseline="central" font-size="${timeFontSize}" font-family="${FONT_FAMILY}" fill="#000">${arrivalTimes[i]}</text>`;
+            }
+        }
+
+        // 站名
+        const nameSvg = buildStationNameSvg(station, cx, lineCenterY, i, isPassed, isCurrentSt, 'alternating');
+        if (nameSvg) stationsSvg += '\n  ' + nameSvg;
+
+        // 换乘框
+        if (isTransferStation) {
+            const framesSvg = buildTransferFrames(station, cx, lineCenterY, i, isPassed, 'alternating');
+            if (framesSvg) stationsSvg += '\n  ' + framesSvg;
+        }
+    }
+
+    // --- 站间箭头 ---
+    let arrowsSvg = '';
+    const arrowW = line.strokeWidth * line.arrowScaleW * 2;
+    const arrowH = line.strokeWidth * line.arrowScaleH;
+    if (V > 1) {
+        for (let si = 0; si < V - 1; si++) {
+            const cx1 = firstCx + spacing * si;
+            const cx2 = firstCx + spacing * (si + 1);
+            const arrowCx = (cx1 + cx2) / 2;
+            // 段颜色判定：取索引更小的站（逻辑上"更早经过"）
+            const leftIdx = visToIdx(si);
+            const rightIdx = visToIdx(si + 1);
+            const earlierIdx = isLeftDir ? rightIdx : leftIdx;
+            const segPassed = isStationPassed(earlierIdx);
+            arrowsSvg += '\n  ' + buildArrowSvg(arrowCx, lineCenterY, arrowW, arrowH, line.direction, 2, segPassed);
+        }
+    }
+    // 两侧延伸段（线路超出的一站间距）也显示箭头
+    if (extLen > 0) {
+        if (!leftTerminal) {
+            arrowsSvg += '\n  ' + buildArrowSvg(firstCx - extLen / 2, lineCenterY, arrowW, arrowH, line.direction, 2, true);
+        }
+        if (!rightTerminal) {
+            arrowsSvg += '\n  ' + buildArrowSvg(lastCx + extLen / 2, lineCenterY, arrowW, arrowH, line.direction, 2, true);
+        }
+    }
+
+    // --- 左侧面板：车门 + 禁止图标 + 提示文字 ---
+    // 门由 doorl/doorr 两扇拼合，静止显示；禁止图标按 currentStationBlink 闪烁
+    // 车门整体上移 10，提示文字「对侧开门」放在车门下方
+    const doorH = 36;                       // 车门高度（viewBox 单位）
+    const doorW = doorH * 62 / 51;          // 车门宽度（原始宽高比 62:51）
+    const doorX = 10;                       // 车门左上角 X（左对齐）
+    const doorCenterY = lineCenterY - 5;    // 车门垂直中心（整体上移 5）
+    const doorY = doorCenterY - doorH / 2;  // 车门左上角 Y
+    const doorCx = doorX + doorW / 2;       // 车门中心 X
+    const prohibitionR = 11;                // 禁止图标半径
+    const doorSvg = buildDoorGraphic(doorX, doorY, doorH);
+    const prohibitionSvg = currentStationBlink
+        ? buildProhibitionIcon(doorCx, doorCenterY, prohibitionR)
+        : '';
+    // 提示文字：车门下方、与车门居中对齐，沿用站名文字颜色
+    const leftColor = line.stationNameColor;
+    const labelY = doorY + doorH + 6;       // 文字垂直中心（车门底边下方留 6 空隙）
+    const labelText = `  <g transform="translate(${doorCx}, ${labelY})">
+    <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
+          font-size="6" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">对侧开门</text>
+    <text x="0" y="5" text-anchor="middle" dominant-baseline="central"
+          font-size="3" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on the other side</text>
+  </g>`;
+    const leftPanel = doorSvg + (prohibitionSvg ? '\n  ' + prohibitionSvg : '') + '\n  ' + labelText;
+
+    // --- 右侧面板：时间 ---
+    const displayTime = getDisplayTime();
+    const hhmm = formatTimeHM(displayTime);
+    const yyyymmdd = `${displayTime.getFullYear()}/${String(displayTime.getMonth() + 1).padStart(2, '0')}/${String(displayTime.getDate()).padStart(2, '0')}`;
+    const dayOfWeek = `星期${getDayOfWeek(displayTime)}`;
+
+    const rightColor = line.stationNameColor;
+    // 时间文字放大，外包线路色圆角描边（无色填充，位于线路显示区右侧之外）
+    const rightText = `  <g transform="translate(265, ${lineCenterY})">
+    <rect x="-15" y="-25" width="40" height="50" rx="3" fill="none" stroke="${line.color}" stroke-width="1"/>
+    <text x="5" y="-8" text-anchor="middle" dominant-baseline="central"
+          font-size="12" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${hhmm}</text>
+    <text x="5" y="3" text-anchor="middle" dominant-baseline="central"
+          font-size="5" font-family="${FONT_FAMILY}" fill="${rightColor}">${yyyymmdd}</text>
+    <text x="5" y="12" text-anchor="middle" dominant-baseline="central"
+          font-size="6" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
+  </g>`;
+
+    // --- 组装 SVG ---
+    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="0.8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  ${lineSvg}
+  ${arrowsSvg}
+  ${stationsSvg}
+  ${leftPanel}
+  ${rightText}
+</svg>`;
+
+    pidsLineTrack.innerHTML = pidsSvg;
+    console.log('[PIDS] renderDoorSideDisplay SVG已设置, 长度:', pidsSvg.length, '方向:', line.direction, '包含车门:', pidsLineTrack.innerHTML.includes('stroke-miterlimit="10"'), '包含延伸段:', !leftTerminal || !rightTerminal);
+    renderBanner();
+    scheduleSave();
+    } catch(e) {
+        console.error('[PIDS] renderDoorSideDisplay 出错:', e.message, e.stack);
+    }
+}
+
+// ========== 本侧开门停站画面 ==========
+
+/**
+ * handleThisSideStop - 进入本侧开门停站画面（幂等）
+ *
+ * 首次进入时复位车门开门动画与右侧面板循环，并启动对应定时器；
+ * 定时器触发渲染时重复调用不做任何事。
+ */
+function handleThisSideStop() {
+    if (stopDisplayKind === 'this') return;
+    stopDisplayKind = 'this';
+    thisSidePanelMode = 'station';
+    doorOpenAmount = 0;
+    startThisSideCycle();
+    startDoorOpenAnim();
+}
+
+/**
+ * handleOppositeSideStop - 进入对侧开门停站画面（幂等）
+ *
+ * 清理本侧开门状态；对侧开门画面自身无独立定时器（复用全局闪烁定时器）。
+ */
+function handleOppositeSideStop() {
+    if (stopDisplayKind === 'opposite') return;
+    stopDisplayKind = 'opposite';
+    cleanupThisSide();
+}
+
+/**
+ * handleStopDisplaysEnd - 离开停站画面时清理本侧开门状态
+ */
+function handleStopDisplaysEnd() {
+    stopDisplayKind = null;
+    cleanupThisSide();
+}
+
+/**
+ * cleanupThisSide - 停止本侧开门画面定时器并复位状态
+ */
+function cleanupThisSide() {
+    if (thisSidePanelTimer) { clearTimeout(thisSidePanelTimer); thisSidePanelTimer = null; }
+    if (doorAnimTimer) { clearInterval(doorAnimTimer); doorAnimTimer = null; }
+    if (doorArrowTimer) { clearInterval(doorArrowTimer); doorArrowTimer = null; }
+    thisSidePanelMode = 'station';
+    doorOpenAmount = 0;
+    doorArrowProgress = 0;
+    doorArrowActive = false;
+}
+
+/**
+ * startThisSideCycle - 启动右侧面板 10s/2s 循环
+ *
+ * 'station'（本站/站名）显示 THIS_SIDE_STATION_MS 后切 'date'（日期），
+ * 'date' 显示 THIS_SIDE_DATE_MS 后切回，用 setTimeout 链实现两种时长。
+ */
+function startThisSideCycle() {
+    if (thisSidePanelTimer) { clearTimeout(thisSidePanelTimer); thisSidePanelTimer = null; }
+    thisSidePanelMode = 'station';
+    const tick = () => {
+        const isStation = thisSidePanelMode === 'station';
+        thisSidePanelTimer = setTimeout(() => {
+            thisSidePanelMode = isStation ? 'date' : 'station';
+            renderPIDSDisplay();
+            tick();
+        }, isStation ? THIS_SIDE_STATION_MS : THIS_SIDE_DATE_MS);
+    };
+    tick();
+}
+
+/**
+ * startDoorOpenAnim - 启动车门开门动画
+ *
+ * 每 DOOR_ANIM_DELAY 步进 doorOpenAmount 直至 1（全开），随后停表（保持开门）。
+ */
+function startDoorOpenAnim() {
+    if (doorAnimTimer) { clearInterval(doorAnimTimer); doorAnimTimer = null; }
+    doorOpenAmount = 0;
+    doorAnimTimer = setInterval(() => {
+        doorOpenAmount = Math.min(1, doorOpenAmount + 1 / DOOR_OPEN_STEPS);
+        renderPIDSDisplay();
+        if (doorOpenAmount >= 1) {
+            clearInterval(doorAnimTimer);
+            doorAnimTimer = null;
+            startDoorArrowAnim();  // 门全开 → 启动两门间绿色上箭头
+        }
+    }, DOOR_ANIM_DELAY);
+}
+
+/**
+ * startDoorArrowAnim - 启动两门之间绿色上箭头动画
+ *
+ * 门全开后调用；每 DOOR_ARROW_DELAY 步进 doorArrowProgress 0→1 循环：
+ * 箭头自两门间隙底部向上移动到顶部后回到底部，持续指示"由此上车"方向。
+ */
+function startDoorArrowAnim() {
+    if (doorArrowTimer) { clearInterval(doorArrowTimer); doorArrowTimer = null; }
+    doorArrowProgress = 0;
+    doorArrowActive = true;
+    doorArrowTimer = setInterval(() => {
+        doorArrowProgress += 1 / DOOR_ARROW_STEPS;
+        if (doorArrowProgress >= 1) doorArrowProgress = 0;  // 循环
+        renderPIDSDisplay();
+    }, DOOR_ARROW_DELAY);
+}
+
+// ========== 列车 + 站台设施渲染 ==========
+
+/**
+ * buildCoachGraphic - 生成单节车厢 SVG 片段
+ *
+ * 内联 coach_L/coach_M/coach_R 三个车厢图形（viewBox 61×31）的路径数据，
+ * 等比缩放到指定车厢尺寸。车头形状（L=左侧圆头 / R=右侧圆头）用于区分
+ * 列车两端，中间车厢为平头。
+ *
+ * @param  {string} shape - 'L' | 'M' | 'R'，对应 coach_L/coach_M/coach_R
+ * @param  {number} x     - 车厢左上角 X
+ * @param  {number} y     - 车厢左上角 Y
+ * @param  {number} carW  - 车厢宽度
+ * @param  {number} carH  - 车厢高度
+ * @returns {string} SVG g 元素字符串
+ */
+function buildCoachGraphic(shape, x, y, carW, carH) {
+    const s = carW / 61;
+    const bodyAttrs = 'fill="#fff" fill-opacity="0.5" stroke="#000" stroke-width="1" stroke-miterlimit="10"';
+    let inner;
+    if (shape === 'L') {
+        inner = `<path ${bodyAttrs} d="M30.5.5h30v30H.5C.5,13.9,13.9.5,30.5.5Z"/>`;
+    } else if (shape === 'R') {
+        inner = `<path ${bodyAttrs} d="M60.5,30.5H.5V.5h30c16.6,0,30,13.4,30,30h0Z"/>`;
+    } else {
+        inner = `<rect ${bodyAttrs} x="0.5" y="0.5" width="60" height="30"/>`;
+    }
+    return `<g transform="translate(${x}, ${y}) scale(${s})">
+    ${inner}
+  </g>`;
+}
+
+/**
+ * buildTrainGraphic - 生成列车编组 SVG 片段
+ *
+ * 车厢按列表顺序排列，第 1 行（cars[0]）为列车前端；车厢号可重复，仅作标记：
+ *   - 右行→：前端在右端，鼻朝右（coach_R），车厢向左延伸
+ *   - 左行←：前端在左端，鼻朝左（coach_L），车厢向右延伸
+ * 车头图案按车头出现顺序（前端→末端）交替朝向：第 1、3、5…个车头随运行方向，
+ * 第 2、4、6…个车头反向 —— 相邻两个车头相背成对（一组车头车尾）；
+ * 未勾选车头的车厢使用 coach_M 中间车。
+ * 车厢号显示在车厢中央，车身底色白半透明、黑描边。
+ *
+ * @param  {Array}  cars     - 车厢数组 [{number, isHead}]
+ * @param  {number} centerX  - 列车水平中心 X
+ * @param  {number} bottomY  - 列车底边 Y（紧贴轨道线）
+ * @param  {number} maxWidth - 可用最大宽度（超宽时整体缩小车高）
+ * @returns {string} SVG 片段字符串
+ */
+function buildTrainGraphic(cars, centerX, bottomY, maxWidth) {
+    const N = cars.length;
+    if (N === 0) return '';
+    const gap = 1.5;            // 车厢间隙
+    const unit = 61 / 31;       // 车厢宽高比
+    let carH = 14;
+    let carW = carH * unit;
+    let totalW = N * carW + (N - 1) * gap;
+    // 宽度超限 → 按可用宽度收缩车高
+    if (totalW > maxWidth) {
+        carH = (maxWidth - (N - 1) * gap) / (N * unit);
+        carW = carH * unit;
+        totalW = N * carW + (N - 1) * gap;
+    }
+    const startX = centerX - totalW / 2;
+    const isRightDir = (line.direction === 'right');
+
+    // 按逻辑顺序（前端→末端）给车头编号：奇数号随运行方向、偶数号反向
+    const headOrdinals = new Array(N).fill(0);
+    let headCount = 0;
+    for (let li = 0; li < N; li++) {
+        if (cars[li].isHead) headOrdinals[li] = ++headCount;
+    }
+
+    let svg = '';
+    for (let i = 0; i < N; i++) {
+        // 视觉索引 i（左→右）→ 逻辑索引（cars[0] 为前端，cars[N-1] 为末端）
+        const logicalIndex = isRightDir ? (N - 1 - i) : i;
+        const car = cars[logicalIndex];
+        const x = startX + i * (carW + gap);
+        // 车头形状：按车头编号交替朝向（奇数随方向、偶数反向）；非车头用中间车
+        let shape;
+        if (!car.isHead) {
+            shape = 'M';
+        } else {
+            const odd = (headOrdinals[logicalIndex] % 2 === 1);
+            shape = odd ? (isRightDir ? 'R' : 'L') : (isRightDir ? 'L' : 'R');
+        }
+        svg += '\n  ' + buildCoachGraphic(shape, x, bottomY - carH, carW, carH);
+        // 车厢号
+        svg += `\n  <text x="${x + carW / 2}" y="${bottomY - carH / 2}" text-anchor="middle" dominant-baseline="central" font-size="${Math.min(6, carH * 0.5)}" font-family="${FONT_FAMILY}" fill="#000">${car.number}</text>`;
+    }
+    return svg;
+}
+
+
+/**
+ * buildStationFacilitySvg - 生成「列车 + 轨道」站台设施 SVG 片段
+ *
+ * 轨道为深灰色水平线，始终位于列车下方；轨道垂直位置由车站类型决定：
+ *   - 地下站（isUnderground=true）：轨道在显示区底部
+ *   - 地上站（isUnderground=false）：轨道在显示区上部
+ * 列车紧贴轨道上方，水平居中于中部面板（x 64~244）。
+ *
+ * @param  {Object} curSt - 当前车站对象（含 isUnderground）
+ * @returns {string} SVG 片段字符串
+ */
+function buildStationFacilitySvg(curSt) {
+    const panelX = 64;
+    const panelW = 180;
+    const panelCenterX = panelX + panelW / 2;
+
+    // 轨道垂直位置：地下站→底部(60)，地上站→上部(18)
+    const railY = curSt.isUnderground ? 60 : 18;
+    const railColor = '#555';   // 深灰色轨道线
+
+    let svg = `  <rect x="${panelX}" y="${railY}" width="${panelW}" height="1.5" fill="${railColor}"/>`;
+
+    // 列车（底边紧贴轨道顶部，水平居中）
+    const cars = (line.trainCars && line.trainCars.length > 0)
+        ? line.trainCars.slice()
+        : CONFIG.defaultTrainCars.map(c => ({ ...c }));
+    svg += buildTrainGraphic(cars, panelCenterX, railY, panelW - 4);
+
+    return svg;
+}
+
+/**
+ * renderThisSideDisplay - 本侧开门停站画面
+ *
+ * 布局（viewBox 300×69.5）：
+ *   - 左侧：车门开门动画 + 「本侧开门」提示文字
+ *   - 中部：列车 + 轨道（轨道位置随车站地上/地下类型变化）
+ *   - 右侧：循环面板 —— 10s「本站/站名」↔ 2s 日期；
+ *           本站为换乘站时在「本站」上方叠加换乘线路框
+ *
+ * 依赖: line, stations, currentStationIndex, doorOpenAmount,
+ *       thisSidePanelMode (全局), FONT_FAMILY, VIEWBOX_HEIGHT
+ */
+function renderThisSideDisplay() {
+    console.log('[PIDS] renderThisSideDisplay 开始执行, 站名:', stations[currentStationIndex] && stations[currentStationIndex].name);
+    try {
+    const viewBoxWidth = 300;
+    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - line.strokeWidth) + line.strokeWidth / 2;
+    const curSt = stations[currentStationIndex];
+    const rightColor = line.stationNameColor;
+
+    // --- 左侧面板：开门动画 + 本侧开门提示 ---
+    const doorH = 36;                       // 车门高度（viewBox 单位）
+    const doorW = doorH * 62 / 51;          // 车门宽度（原始宽高比 62:51）
+    const doorX = 10;                       // 车门左上角 X（左对齐）
+    const doorCenterY = lineCenterY - 5;    // 车门垂直中心（与对侧开门一致）
+    const doorY = doorCenterY - doorH / 2;  // 车门左上角 Y
+    const doorCx = doorX + doorW / 2;       // 车门中心 X
+    const doorSvg = buildDoorGraphic(doorX, doorY, doorH, doorOpenAmount);
+    // 门全开后：两门之间绿色上箭头自底向顶循环运动（缓入缓出 + 两端淡入淡出）
+    let arrowSvg = '';
+    if (doorArrowActive) {
+        const arrowTravel = doorH - 12;                 // 12 = 箭头自身高度（viewBox 单位）
+        const arrowBottom = doorY + doorH - 6;          // 行程底：箭头贴门底边
+        // 缓动：smoothstep（p²(3-2p)）缓入缓出，起点加速、终点减速
+        const raw = doorArrowProgress;
+        const eased = raw * raw * (3 - 2 * raw);
+        const arrowCy = arrowBottom - eased * arrowTravel;
+        // 淡入淡出：起点(底)淡入、终点(顶)淡出，中部全亮（两端各占 15% 行程）
+        const FADE = 0.15;
+        const arrowOp = raw < FADE ? raw / FADE : (raw > 1 - FADE ? (1 - raw) / FADE : 1);
+        arrowSvg = '\n  ' + buildDoorArrowSvg(doorCx, arrowCy, arrowOp);
+    }
+    const leftColor = line.stationNameColor;
+    const labelY = doorY + doorH + 6;       // 文字垂直中心（车门底边下方留 6 空隙）
+    const labelText = `  <g transform="translate(${doorCx}, ${labelY})">
+    <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
+          font-size="6" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">本侧开门</text>
+    <text x="0" y="5" text-anchor="middle" dominant-baseline="central"
+          font-size="3" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on this side</text>
+  </g>`;
+    const leftPanel = doorSvg + arrowSvg + '\n  ' + labelText;
+
+    // --- 中部：列车 + 轨道（轨道位置随车站地上/地下类型变化） ---
+    const midPanel = buildStationFacilitySvg(curSt);
+
+    // --- 右侧面板：10s 本站/站名 ↔ 2s 日期 循环 ---
+    // 外框与对侧开门时间面板一致：线路色圆角描边、无色填充，固定 40×50
+    const rightX = 265;  // 与对侧开门时间面板 translate(265) 对齐
+    const displayTime = getDisplayTime();
+    const yyyymmdd = `${displayTime.getFullYear()}/${String(displayTime.getMonth() + 1).padStart(2, '0')}/${String(displayTime.getDate()).padStart(2, '0')}`;
+    const dayOfWeek = `星期${getDayOfWeek(displayTime)}`;
+    const stationName = curSt.name || '';
+
+    const frameRect = `    <rect x="-15" y="-25" width="40" height="50" rx="3" fill="none" stroke="${line.color}" stroke-width="1"/>`;
+
+    let rightPanel = '';
+    if (thisSidePanelMode === 'date') {
+        rightPanel = `  <g transform="translate(${rightX}, ${lineCenterY})">
+    ${frameRect}
+    <text x="5" y="-3" text-anchor="middle" dominant-baseline="central" font-size="6" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${yyyymmdd}</text>
+    <text x="5" y="4" text-anchor="middle" dominant-baseline="central" font-size="4" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
+  </g>`;
+    } else {
+        let content = `  <g transform="translate(${rightX}, ${lineCenterY})">
+    ${frameRect}
+    <text x="5" y="-4" text-anchor="middle" dominant-baseline="central" font-size="8" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">本站</text>
+    <text x="5" y="5" text-anchor="middle" dominant-baseline="central" font-size="5" font-family="${FONT_FAMILY}" fill="${rightColor}">${stationName}</text>
+  </g>`;
+        // 换乘站：在「本站」上方添加换乘线路框
+        // buildTransferFrames 的 'below' 模式 = 框在站点/文字上方
+        const isTransferStation = curSt.type === '换乘站'
+            && curSt.transferLines && curSt.transferLines.length > 0;
+        if (isTransferStation) {
+            const halfIcon = line.iconSize / 2;
+            const textTop = lineCenterY - 4 - 8 / 2;  // 「本站」文字顶部（central 基线）
+            const synthCy = textTop - 2 + halfIcon + TEXT_PAD;  // 框底边 = textTop - 2
+            // narrow=true：本侧开门窄面板，2 条换乘单列纵向（①/②），3 条及以上回 2 列网格（末行居中）
+            const framesSvg = buildTransferFrames(curSt, rightX, synthCy, 0, false, 'below', true);
+            if (framesSvg) content = framesSvg + '\n  ' + content;
+        }
+        rightPanel = content;
+    }
+
+    // --- 组装 SVG ---
+    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
+  ${leftPanel}
+  ${midPanel}
+  ${rightPanel}
+</svg>`;
+
+    pidsLineTrack.innerHTML = pidsSvg;
+    console.log('[PIDS] renderThisSideDisplay SVG已设置, 长度:', pidsSvg.length, '面板模式:', thisSidePanelMode, '开门度:', doorOpenAmount.toFixed(2));
+    renderBanner();
+    scheduleSave();
+    } catch(e) {
+        console.error('[PIDS] renderThisSideDisplay 出错:', e.message, e.stack);
+    }
+}
+
+function renderPIDSDisplay() {
+    // 停站中 → 按车门朝向显示开门特殊画面（对侧开门 / 本侧开门）
+    if (!isDeparted && currentStationIndex >= 0 && currentStationIndex < stations.length) {
+        const curSt = stations[currentStationIndex];
+        if (curSt.doorSide === false) {
+            handleOppositeSideStop();
+            renderDoorSideDisplay();
+            return;
+        }
+        handleThisSideStop();
+        renderThisSideDisplay();
+        return;
+    }
+    // 离开停站画面 → 清理本侧开门状态（定时器、动画进度）
+    handleStopDisplaysEnd();
+
+    const viewBoxWidth = 300;
+    const LINE_EXTENSION = isDeparted ? 0 : 20;
     const rectX = (viewBoxWidth - line.length) / 2;
+    const lineStartX = rectX - LINE_EXTENSION;
+    const lineEndX = rectX + line.length + LINE_EXTENSION;
     const lineCenterY = getLineY() + line.strokeWidth / 2;
 
     // 站点图标在 viewBox 中的尺寸（由控制面板全局设置）
@@ -1459,10 +2243,10 @@ function renderPIDSDisplay() {
     if (currentStationIndex >= 0 && currentCx !== null) {
         // 已过段 = 列车已经过的区间（左行←时在当前站右侧，右行→时在当前站左侧）
         const isLeftDir = (line.direction === 'left');
-        const passedStart = isLeftDir ? currentCx : rectX;
-        const passedEnd   = isLeftDir ? (rectX + line.length) : currentCx;
-        const upcomingStart = isLeftDir ? rectX : currentCx;
-        const upcomingEnd   = isLeftDir ? currentCx : (rectX + line.length);
+        const passedStart = isLeftDir ? currentCx : lineStartX;
+        const passedEnd   = isLeftDir ? lineEndX : currentCx;
+        const upcomingStart = isLeftDir ? lineStartX : currentCx;
+        const upcomingEnd   = isLeftDir ? currentCx : lineEndX;
 
         // 已过段（灰色）
         if (passedEnd > passedStart) {
@@ -1474,7 +2258,7 @@ function renderPIDSDisplay() {
         }
     } else {
         // 无当前站 → 全彩色
-        lineSvg = `<rect x="${rectX}" y="${getLineY()}" width="${line.length}" height="${line.strokeWidth}" fill="${line.color}" rx="2"/>`;
+        lineSvg = `<rect x="${lineStartX}" y="${getLineY()}" width="${lineEndX - lineStartX}" height="${line.strokeWidth}" fill="${line.color}" rx="2"/>`;
     }
 
     const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
@@ -1492,6 +2276,7 @@ function renderPIDSDisplay() {
 </svg>`;
 
     pidsLineTrack.innerHTML = pidsSvg;
+    console.log('[PIDS] ⚠️ renderPIDSDisplay 末尾设置了全幅SVG（不应该在停站对侧开门时执行到此处）');
     renderBanner();
     scheduleSave();
 }
@@ -1505,7 +2290,9 @@ function createStationData() {
         secondaryName: `Station ${stationCounter}`,
         type: '普通站',
         timeToNext: 2,  // 到下一站所需时间（分钟）
-        transferLines: []  // 换乘线路列表 [{color, nameCN, nameEN, textMode}]
+        transferLines: [],  // 换乘线路列表 [{color, nameCN, nameEN, textMode}]
+        doorSide: true,     // 是否本侧开门（false = 对侧开门）
+        isUnderground: false // 是否地下站（false = 地上站，true = 地下站）
     };
 }
 
@@ -1571,6 +2358,40 @@ function createStationItem(station) {
     });
     // 插入到 typeSpan 之后
     typeSpan.insertAdjacentElement('afterend', addTransferBtn);
+
+    // 本侧开门复选框
+    const doorCheck = document.createElement('label');
+    doorCheck.className = 'station-door-check';
+    doorCheck.innerHTML = `<input type="checkbox" data-station-id="${station.id}" ${station.doorSide !== false ? 'checked' : ''}>本侧开门`;
+    doorCheck.querySelector('input').addEventListener('change', (e) => {
+        station.doorSide = e.target.checked;
+        renderPIDSDisplay();
+        scheduleSave();
+    });
+    // 插入到换乘按钮之后
+    addTransferBtn.insertAdjacentElement('afterend', doorCheck);
+
+    // 地上站 / 地下站选择
+    const groundSelect = document.createElement('select');
+    groundSelect.className = 'station-ground-select';
+    groundSelect.dataset.stationId = station.id;
+    groundSelect.title = '车站类型（影响轨道位置）';
+    const optAbove = document.createElement('option');
+    optAbove.value = 'above';
+    optAbove.textContent = '地上站';
+    const optUnder = document.createElement('option');
+    optUnder.value = 'under';
+    optUnder.textContent = '地下站';
+    groundSelect.appendChild(optAbove);
+    groundSelect.appendChild(optUnder);
+    groundSelect.value = station.isUnderground ? 'under' : 'above';
+    groundSelect.addEventListener('change', (e) => {
+        station.isUnderground = (e.target.value === 'under');
+        renderPIDSDisplay();
+        scheduleSave();
+    });
+    // 插入到本侧开门复选框之后
+    doorCheck.insertAdjacentElement('afterend', groundSelect);
 
     // 上移
     const upBtn = item.querySelector('.station-move-up');
@@ -1878,6 +2699,110 @@ function updateTransferPanel(item, station) {
     item.appendChild(panel);
 }
 
+// ========== 列车车厢管理 ==========
+
+/**
+ * renderTrainCarList - 重建列车车厢编辑列表 DOM
+ *
+ * 保持列表顺序（第 1 行 = 列车前端），每行包含：
+ * 车厢号输入、是否为车头复选框、删除按钮。
+ *
+ * 依赖: line.trainCars (全局), trainCarList (全局 DOM 引用)
+ */
+function renderTrainCarList() {
+    if (!trainCarList) return;
+    // 不按车厢号排序：车厢号可重复，仅作标记；列表顺序即列车顺序
+    trainCarList.innerHTML = '';
+    line.trainCars.forEach((car, index) => {
+        trainCarList.appendChild(createTrainCarRow(car, index));
+    });
+}
+
+/**
+ * createTrainCarRow - 生成单节车厢编辑行 DOM
+ *
+ * @param  {Object}  car   - 车厢对象 {number, isHead}
+ * @param  {number}  index - 车厢在编组中的索引（用于删除定位）
+ * @returns {HTMLElement} 车厢编辑行 DOM 元素
+ */
+function createTrainCarRow(car, index) {
+    const row = document.createElement('div');
+    row.className = 'train-car-row';
+
+    // 车厢号输入
+    const numInput = document.createElement('input');
+    numInput.type = 'number';
+    numInput.className = 'train-car-num-input';
+    numInput.min = '1';
+    numInput.max = '99';
+    numInput.value = car.number;
+    numInput.title = '车厢号（可重复，仅作标记）';
+    numInput.addEventListener('change', () => {
+        car.number = parseInt(numInput.value, 10) || car.number;
+        renderTrainCarList();
+        renderPIDSDisplay();
+        scheduleSave();
+    });
+    row.appendChild(numInput);
+
+    // 是否为车头复选框
+    const headLabel = document.createElement('label');
+    headLabel.className = 'train-car-head-check';
+    headLabel.title = '勾选后该车厢使用车头图案';
+    const headCheck = document.createElement('input');
+    headCheck.type = 'checkbox';
+    headCheck.checked = !!car.isHead;
+    headCheck.addEventListener('change', () => {
+        car.isHead = headCheck.checked;
+        renderPIDSDisplay();
+        scheduleSave();
+    });
+    headLabel.appendChild(headCheck);
+    headLabel.appendChild(document.createTextNode('车头'));
+    row.appendChild(headLabel);
+
+    // 删除按钮
+    const delBtn = document.createElement('button');
+    delBtn.className = 'train-car-del-btn';
+    delBtn.textContent = '✕';
+    delBtn.title = '删除该车厢';
+    delBtn.addEventListener('click', () => {
+        removeTrainCar(index);
+    });
+    row.appendChild(delBtn);
+
+    return row;
+}
+
+/**
+ * addTrainCar - 添加一节车厢
+ *
+ * 新车厢号取当前最大车厢号 +1，默认非车头。
+ * 添加后重建列表并重新渲染。
+ */
+function addTrainCar() {
+    const maxNumber = line.trainCars.reduce((max, c) => Math.max(max, c.number || 0), 0);
+    line.trainCars.push({ number: maxNumber + 1, isHead: false });
+    renderTrainCarList();
+    renderPIDSDisplay();
+    scheduleSave();
+}
+
+/**
+ * removeTrainCar - 删除一节车厢
+ *
+ * 至少保留 1 节车厢，删除后重建列表并重新渲染。
+ *
+ * @param {number} index - 车厢在 line.trainCars 中的索引
+ */
+function removeTrainCar(index) {
+    if (line.trainCars.length <= 1) return;
+    line.trainCars.splice(index, 1);
+    renderTrainCarList();
+    renderPIDSDisplay();
+    scheduleSave();
+}
+
 function addStation() {
     const station = createStationData();
     stations.push(station);
@@ -1963,7 +2888,8 @@ function resetLine() {
     line.nameDisplayMode = CONFIG.defaultNameDisplayMode;
     line.bannerTextColor = CONFIG.defaultBannerTextColor;
     line.stationNameColor = CONFIG.defaultStationNameColor;
-    line.trainFormation = CONFIG.defaultTrainFormation;
+    line.trainCars = CONFIG.defaultTrainCars.map(c => ({ ...c }));
+    delete line.trainFormation;  // 清除旧版编组字符串残留，避免序列化
     line.stopPosition = CONFIG.defaultStopPosition;
     line.direction = CONFIG.defaultDirection;
     line.arrowScaleW = CONFIG.defaultArrowScaleW;
@@ -2014,7 +2940,7 @@ function resetLine() {
     nameModeSelect.value = line.nameDisplayMode;
     nameFontSizeInput.value = line.nameFontSize;
     nameFontSizeValue.textContent = line.nameFontSize;
-    trainFormationInput.value = line.trainFormation;
+    renderTrainCarList();
     stopPositionSelect.value = line.stopPosition;
     directionSelect.value = line.direction;
     arrowScaleWInput.value = line.arrowScaleW;
@@ -2486,10 +3412,7 @@ nameFontSizeInput.addEventListener('input', (e) => {
     scheduleSave();
 });
 
-trainFormationInput.addEventListener('change', () => {
-    line.trainFormation = trainFormationInput.value;
-    scheduleSave();
-});
+addTrainCarBtn.addEventListener('click', addTrainCar);
 
 stopPositionSelect.addEventListener('change', () => {
     line.stopPosition = stopPositionSelect.value;
@@ -2603,7 +3526,7 @@ iconSizeValue.textContent = line.iconSize;
 nameModeSelect.value = line.nameDisplayMode;
 nameFontSizeInput.value = line.nameFontSize;
 nameFontSizeValue.textContent = line.nameFontSize;
-trainFormationInput.value = line.trainFormation;
+renderTrainCarList();
 stopPositionSelect.value = line.stopPosition;
 directionSelect.value = line.direction;
 arrowScaleWInput.value = line.arrowScaleW;
@@ -2697,9 +3620,19 @@ window.PIDS = {
     buildStationNameSvg,
     buildTransferIcon,
     buildTransferIconGray,
+    buildDoorGraphic,
+    buildProhibitionIcon,
+    buildDoorArrowSvg,
     buildTransferLineFrame,
     buildTransferFrames,
     buildArrowSvg,
+    buildCoachGraphic,
+    buildTrainGraphic,
+    buildStationFacilitySvg,
+    renderTrainCarList,
+    addTrainCar,
+    removeTrainCar,
+    migrateTrainCars,
     restartArrowAnimation,
     arrowFrame,
     addStation,

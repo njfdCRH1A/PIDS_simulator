@@ -632,6 +632,27 @@ body {
     background: rgba(244, 67, 54, 0.4);
 }
 
+/* 本侧开门复选框 */
+.station-door-check {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.station-door-check input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: #e94560;
+    cursor: pointer;
+    margin: 0;
+}
+
 .editor-header-actions {
     display: flex;
     gap: 8px;
@@ -752,35 +773,136 @@ body {
     margin: 0 2px;
 }
 
-/* 列车编组文本框 */
-.train-formation-input {
-    width: 100%;
-    padding: 8px 10px;
-    background: var(--input-bg);
-    color: var(--text-primary);
-    border: 1px solid var(--input-border);
+/* 列车车厢编辑 */
+.train-car-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.train-car-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--item-bg);
+    border: 1px solid var(--border-light);
     border-radius: 6px;
-    font-size: 0.78rem;
-    font-family: 'Consolas', 'Courier New', monospace;
-    resize: vertical;
-    outline: none;
-    line-height: 1.6;
     transition: border-color 0.2s ease;
 }
 
-.train-formation-input:hover {
+.train-car-row:hover {
+    border-color: rgba(233, 69, 96, 0.3);
+}
+
+.train-car-num-input {
+    width: 46px;
+    padding: 3px 6px;
+    background: var(--item-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: inherit;
+    text-align: center;
+    outline: none;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.train-car-num-input::-webkit-inner-spin-button,
+.train-car-num-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.train-car-num-input:focus {
     border-color: #e94560;
 }
 
-.train-formation-input:focus {
-    border-color: #e94560;
-    box-shadow: 0 0 6px rgba(233, 69, 96, 0.3);
-}
-
-.train-formation-input::placeholder {
-    color: var(--text-muted);
-    font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+.train-car-head-check {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.train-car-head-check input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: #e94560;
+    cursor: pointer;
+    margin: 0;
+}
+
+.train-car-del-btn {
+    padding: 3px 8px;
+    background: rgba(244, 67, 54, 0.15);
+    color: #e57373;
+    border: 1px solid rgba(244, 67, 54, 0.25);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    flex-shrink: 0;
+    font-family: inherit;
+    transition: background-color 0.2s ease;
+}
+
+.train-car-del-btn:hover {
+    background: rgba(244, 67, 54, 0.3);
+}
+
+.train-car-add-btn {
+    width: 100%;
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px dashed var(--input-border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+
+.train-car-add-btn:hover {
+    border-color: #e94560;
+    color: #e94560;
+}
+
+/* 车站地上/地下站选择 */
+.station-ground-select {
+    padding: 4px 8px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    flex-shrink: 0;
+    transition: border-color 0.2s ease;
+}
+
+.station-ground-select:hover {
+    border-color: #e94560;
+}
+
+.station-ground-select:focus {
+    border-color: #e94560;
+}
+
+.station-ground-select option {
+    background: var(--bg-surface);
+    color: var(--text-primary);
 }
 
 .time-dow {

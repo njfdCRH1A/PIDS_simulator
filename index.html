@@ -122,11 +122,11 @@
                     <input type="range" id="positionInput" class="slider" min="0" max="1" step="0.05" value="0.5">
                 </div>
 
-                <!-- 列车编组 -->
+                <!-- 列车车厢 -->
                 <div class="control-group">
-                    <label>列车编组</label>
-                    <textarea id="trainFormationInput" class="train-formation-input" rows="5" placeholder="车厢号,类型&#10;1,1&#10;2,0&#10;3,0&#10;4,0&#10;5,0&#10;6,-1"></textarea>
-                    <span style="font-size:0.68rem;color:var(--text-muted);">每行: 车厢号,类型 (1=朝右车头, -1=朝左车头, 0=中间车)</span>
+                    <label>列车车厢</label>
+                    <div id="trainCarList" class="train-car-list"></div>
+                    <button id="addTrainCarBtn" class="train-car-add-btn">➕ 添加车厢</button>
                 </div>
 
                 <!-- 停止位置 -->
