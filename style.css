@@ -259,7 +259,8 @@ body {
 
 /* === pids-display-wrapper 及内部：保持原样不变 === */
 .pids-display-wrapper {
-    aspect-ratio: 1920 / 540;
+    box-sizing: content-box;    /* aspect-ratio 作用于内容盒，使屏幕严格 5:1（12px padding 不破坏比例） */
+    aspect-ratio: 2700 / 540;   /* 5:1 长条屏 */
     background: linear-gradient(180deg, #2a2a3a 0%, #1e1e2e 100%);
     border-radius: 16px;
     padding: 12px;

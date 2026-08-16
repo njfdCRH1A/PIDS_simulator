@@ -5,9 +5,9 @@
 
 // ========== 配置 ==========
 const CONFIG = {
-    minLength: 10,
-    maxLength: 300,
-    defaultLength: 300,
+    minLength: 0,
+    maxLength: 1,
+    defaultLength: 1,
     defaultColor: '#e94560',
     minStrokeWidth: 1,
     maxStrokeWidth: 20,
@@ -41,7 +41,8 @@ const CONFIG = {
     defaultArrowStrokeWidth: 4
 };
 
-const VIEWBOX_HEIGHT = 69.5;  // 1920:445 = 300*445/1920 ≈ 69.5 (banner=95)
+const VIEWBOX_HEIGHT = 445;  // 线路 viewBox 高度：与总体 2700×540 统一（banner=95, line=445）
+const SCALE = 6.4;           // 坐标统一化缩放因子：421.875 → 2700（×6.4），69.5 → 445（≈×6.4）
 
 /**
  * getLineY - 将线路位置比例 (0~1) 换算为 viewBox Y 坐标
@@ -51,7 +52,7 @@ const VIEWBOX_HEIGHT = 69.5;  // 1920:445 = 300*445/1920 ≈ 69.5 (banner=95)
  * @returns {number} 线路矩形顶边的 viewBox Y 坐标
  */
 function getLineY() {
-    return line.positionY * (VIEWBOX_HEIGHT - line.strokeWidth);
+    return line.positionY * (VIEWBOX_HEIGHT - line.strokeWidth * SCALE);
 }
 
 // ========== 线路状态（单线路） ==========
@@ -319,10 +320,8 @@ function loadState() {
             if (line.positionY > 1) {
                 line.positionY = Math.min(1, Math.max(0, line.positionY / 60));
             }
-            // 迁移旧版 defaultLength: 100/280 → 300
-            if (line.length === 100 || line.length === 280) {
-                line.length = CONFIG.defaultLength;
-            }
+            // 迁移旧版 length 绝对值 (10~300) → 比例值 (0~1)
+            if (line.length > 1) line.length = Math.min(1, line.length / 300);
             // 迁移旧版 trainFormation 字符串 → trainCars 数组
             migrateTrainCars();
         }
@@ -465,7 +464,7 @@ function importConfig(file) {
             stationNameColorInput.value = line.stationNameColor;
             stationNameColorPreview.style.backgroundColor = line.stationNameColor;
             lengthInput.value = line.length;
-            lengthValue.textContent = line.length;
+            lengthValue.textContent = Math.round(line.length * 100) + '%';
             strokeInput.value = line.strokeWidth;
             strokeValue.textContent = line.strokeWidth;
             positionInput.value = line.positionY;
@@ -610,17 +609,22 @@ function resizePIDS() {
     const availW = pidsSection.clientWidth - padLeft - padRight;
     const availH = pidsSection.clientHeight - padTop - padBottom;
 
-    // 1920:540 比例（CSS aspect-ratio 负责等比缩放）
-    const RATIO_W = 1920, RATIO_H = 540;
-    const hFromW = availW * RATIO_H / RATIO_W;
+    // 2700:540 比例（5:1 长条屏，CSS aspect-ratio 负责等比缩放）。
+    // .pids-display-wrapper 为 content-box：aspect-ratio 作用于内容盒，
+    // 12px×2 padding 占用额外空间，故按内容盒（avail - 24）计算，保证屏幕严格 5:1。
+    const RATIO_W = 2700, RATIO_H = 540;
+    const WRAP_PAD = 24;  // 12px × 2（左右/上下）
+    const contentW = availW - WRAP_PAD;
+    const contentH = availH - WRAP_PAD;
+    const hFromW = contentW * RATIO_H / RATIO_W;
 
-    if (hFromW <= availH) {
-        // 宽度先达到限制：设宽度，高度由 CSS aspect-ratio 自动计算
-        pidsWrapper.style.width = availW + 'px';
+    if (hFromW <= contentH) {
+        // 宽度先达到限制：设内容盒宽度，高度由 CSS aspect-ratio 自动计算
+        pidsWrapper.style.width = contentW + 'px';
         pidsWrapper.style.height = 'auto';
     } else {
-        // 高度先达到限制：设高度，宽度由 CSS aspect-ratio 自动计算
-        pidsWrapper.style.height = availH + 'px';
+        // 高度先达到限制：设内容盒高度，宽度由 CSS aspect-ratio 自动计算
+        pidsWrapper.style.height = contentH + 'px';
         pidsWrapper.style.width = 'auto';
     }
 }
@@ -628,7 +632,7 @@ function resizePIDS() {
 // ========== 站名 SVG 生成 ==========
 
 const FONT_FAMILY = "SimHei, '黑体', 'Microsoft YaHei', sans-serif";
-const TEXT_PAD = 2;  // 文字与站点圆圈的间距（viewBox 单位）
+const TEXT_PAD = 12.8;  // 文字与站点圆圈的间距（viewBox 单位，2700 坐标系）
 const VERT_LETTER_SPACING = '0em';  // 竖排模式下字符间距（负值=收紧，正值=拉开）
 
 /**
@@ -646,9 +650,9 @@ const VERT_LETTER_SPACING = '0em';  // 竖排模式下字符间距（负值=收�
 function estimateStationExtent(station, index) {
     const cnName = (station.name || '').trim();
     const secName = (station.secondaryName || '').trim();
-    const cnSize = line.nameFontSize;
+    const cnSize = line.nameFontSize * SCALE;
     const secSize = cnSize / 2;
-    const halfIcon = line.iconSize / 2;
+    const halfIcon = line.iconSize * SCALE / 2;
 
     // 站点圆圈始终占 halfIcon
     let left = halfIcon;
@@ -672,7 +676,7 @@ function estimateStationExtent(station, index) {
         }
         case 'diagonal': {
             // text-anchor="start"，从 cx+offset 开始向右上 45°
-            const offset = halfIcon + 3;  // 与 buildDiagonalText 保持一致
+            const offset = halfIcon + 19.2;  // 与 buildDiagonalText 保持一致（+3×6.4）
             right = Math.max(right, (offset + textWidth) * 0.707);
             break;
         }
@@ -706,7 +710,7 @@ function estimateStationExtent(station, index) {
 function buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, index, isPassed, isCurrent) {
     const isAbove = index % 2 === 0;
     const hasSec = !!secName;
-    const gap = hasSec ? Math.max(1, secSize * 0.3) : 0;
+    const gap = hasSec ? Math.max(6.4, secSize * 0.3) : 0;
     const textColor = (!isDeparted && isCurrent) ? '#f00' : (isPassed ? '#999' : line.stationNameColor);
 
     // 最靠近站点的行基线
@@ -742,7 +746,7 @@ function buildAlternatingText(cx, cy, cnName, secName, cnSize, secSize, halfIcon
 function buildDiagonalText(cx, cy, cnName, secName, cnSize, secSize, halfIcon, isPassed, isCurrent) {
     const hasSec = !!secName;
     const gap = hasSec ? secSize * 0.1 : 0;
-    const offset = halfIcon + 3;  // 贴近站点，向左上偏移
+    const offset = halfIcon + 19.2;  // 贴近站点，向左上偏移（+3×6.4）
     const textColor = (!isDeparted && isCurrent) ? '#f00' : (isPassed ? '#999' : line.stationNameColor);
 
     let svg = `<g transform="rotate(-45, ${cx}, ${cy})">`;
@@ -804,9 +808,9 @@ function buildStationNameSvg(station, cx, cy, index, isPassed, isCurrent, nameMo
     const secName = (station.secondaryName || '').trim();
     if (!cnName && !secName) return '';
 
-    const cnSize = line.nameFontSize;
+    const cnSize = line.nameFontSize * SCALE;
     const secSize = cnSize / 2;
-    const halfIcon = line.iconSize / 2;
+    const halfIcon = line.iconSize * SCALE / 2;
 
     switch (nameMode || line.nameDisplayMode) {
         case 'alternating':
@@ -870,20 +874,20 @@ function renderBanner() {
         timeEN = isTerminal ? '' : `arrive in ${timeToNext} min`;
     }
 
-    const bannerSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 95" preserveAspectRatio="none">
-  <rect width="1920" height="95" fill="${line.color}"/>
-  <path fill="#fff" d="M1352.7,90h-785.5c-8.3,0-15-6.7-15-15V0h815.5v75c0,8.3-6.7,15-15,15Z"/>
-  <text x="1890" y="60" fill="${txtColor}" font-size="44" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">${timeStr}</text>
-  <text x="1480" y="45" fill="${txtColor}" fill-opacity="0.85" font-size="30" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">开往：</text>
-  <text x="1600" y="45" fill="${txtColor}" fill-opacity="0.85" font-size="30" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${destCnName}</text>
-  <text x="1475" y="65" fill="${txtColor}" fill-opacity="0.65" font-size="20" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">To：</text>
-  <text x="1600" y="65" fill="${txtColor}" fill-opacity="0.65" font-size="15" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${destSecName}</text>
-  <text x="570" y="42" fill="#000" font-size="24" font-family="${FONT_FAMILY}" font-weight="bold">${cnLabel}</text>
-  <text x="960" y="42" fill="#e94560" font-size="32" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${nameCN}</text>
-  <text x="1350" y="42" fill="#000" font-size="24" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">${timeCN}</text>
-  <text x="570" y="72" fill="#000" fill-opacity="0.85" font-size="15" font-family="${FONT_FAMILY}">${enLabel}</text>
-  <text x="960" y="72" fill="#e94560" fill-opacity="0.85" font-size="20" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${nameEN}</text>
-  <text x="1350" y="72" fill="#000" fill-opacity="0.85" font-size="15" font-family="${FONT_FAMILY}" text-anchor="end">${timeEN}</text>
+    const bannerSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2700 95" preserveAspectRatio="xMidYMid meet">
+  <rect width="2700" height="95" fill="${line.color}"/>
+  <path fill="#fff" d="M1902.23,90h-1104.61c-11.67,0-21.09-6.7-21.09-15V0h1146.80v75c0,8.3-9.42,15-21.09,15Z"/>
+  <text x="2657.81" y="60" fill="${txtColor}" font-size="44" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">${timeStr}</text>
+  <text x="2081.25" y="45" fill="${txtColor}" fill-opacity="0.85" font-size="30" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">开往：</text>
+  <text x="2250" y="45" fill="${txtColor}" fill-opacity="0.85" font-size="30" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${destCnName}</text>
+  <text x="2074.22" y="65" fill="${txtColor}" fill-opacity="0.65" font-size="20" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">To：</text>
+  <text x="2250" y="65" fill="${txtColor}" fill-opacity="0.65" font-size="15" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${destSecName}</text>
+  <text x="801.56" y="42" fill="#000" font-size="24" font-family="${FONT_FAMILY}" font-weight="bold">${cnLabel}</text>
+  <text x="1350" y="42" fill="#e94560" font-size="32" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${nameCN}</text>
+  <text x="1898.44" y="42" fill="#000" font-size="24" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="end">${timeCN}</text>
+  <text x="801.56" y="72" fill="#000" fill-opacity="0.85" font-size="15" font-family="${FONT_FAMILY}">${enLabel}</text>
+  <text x="1350" y="72" fill="#e94560" fill-opacity="0.85" font-size="20" font-family="${FONT_FAMILY}" font-weight="bold" text-anchor="middle">${nameEN}</text>
+  <text x="1898.44" y="72" fill="#000" fill-opacity="0.85" font-size="15" font-family="${FONT_FAMILY}" text-anchor="end">${timeEN}</text>
 </svg>`;
 
     pidsBanner.innerHTML = bannerSvg;
@@ -993,13 +997,13 @@ function buildTransferIconGray(cx, cy, size) {
 function estimateTransferFrameSize(lineData) {
     const cnLines = (lineData.nameCN || '').replace(/\\n/g, '\n').split('\n');
     const enLines = (lineData.nameEN || '').replace(/\\n/g, '\n').split('\n');
-    const cnFS = lineData.cnFontSize || 3.0;
-    const enFS = lineData.enFontSize || 2.0;
-    const padX = 1;  // 左右各 0.5px
-    const padY = 0.5;  // 上 0.5px、下 0px
+    const cnFS = (lineData.cnFontSize || 3.0) * SCALE;
+    const enFS = (lineData.enFontSize || 2.0) * SCALE;
+    const padX = 6.4;  // 左右各 3.2（×6.4）
+    const padY = 3.2;  // 上 3.2、下 0
 
     // 宽度：取所有行中最长的一行
-    let maxW = 10;
+    let maxW = 64;
     cnLines.forEach(l => {
         const w = l.length * cnFS + padX;
         if (w > maxW) maxW = w;
@@ -1013,10 +1017,10 @@ function estimateTransferFrameSize(lineData) {
     const lnGap = 1.0;  // 行高系数（行高 ≈ fontSize × lnGap）
     const cnH = cnLines.length > 0 ? cnLines.length * cnFS * lnGap : 0;
     const enH = enLines.length > 0 ? enLines.length * enFS * lnGap : 0;
-    const segGap = (cnLines.length > 0 && enLines.length > 0) ? 0.5 : 0;
+    const segGap = (cnLines.length > 0 && enLines.length > 0) ? 3.2 : 0;
     const h = cnH + segGap + enH + padY;
 
-    return { w: maxW, h: Math.max(6, h), cnLines, enLines, cnFS, enFS };
+    return { w: maxW, h: Math.max(38.4, h), cnLines, enLines, cnFS, enFS };
 }
 
 /**
@@ -1036,8 +1040,8 @@ function buildTransferLineFrame(lineData, x, y, frameW, frameH, isPassed) {
     const rx = frameW * (5.4 / 62);
     const fillColor = isPassed ? '#ccc' : lineData.color;
     const textColor = isPassed ? '#999' : (lineData.textMode === 'light' ? '#ffffff' : '#000000');
-    const cnFS = lineData.cnFontSize || 3.0;
-    const enFS = lineData.enFontSize || 2.0;
+    const cnFS = (lineData.cnFontSize || 3.0) * SCALE;
+    const enFS = (lineData.enFontSize || 2.0) * SCALE;
     const lnGap = 1.0;
 
     const cnLines = (lineData.nameCN || '').replace(/\\n/g, '\n').split('\n');
@@ -1046,7 +1050,7 @@ function buildTransferLineFrame(lineData, x, y, frameW, frameH, isPassed) {
     // CN 文字块总高
     const cnBlockH = cnLines.length > 0 ? cnLines.length * cnFS * lnGap : 0;
     const enBlockH = enLines.length > 0 ? enLines.length * enFS * lnGap : 0;
-    const segGap = (cnLines.length > 0 && enLines.length > 0) ? 0.5 : 0;
+    const segGap = (cnLines.length > 0 && enLines.length > 0) ? 3.2 : 0;
     const blockH = cnBlockH + segGap + enBlockH;
 
     // CN 块起始 Y（顶部对齐，上留白 = frameH - blockH）
@@ -1115,9 +1119,9 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed, nameMode, nar
     const lines = station.transferLines;
     if (!lines || lines.length === 0) return '';
 
-    const viewBoxWidth = 300;
-    const frameGap = 1;
-    const halfIcon = line.iconSize / 2;
+    const viewBoxWidth = 2700;
+    const frameGap = 6.4;
+    const halfIcon = line.iconSize * SCALE / 2;
     const count = lines.length;
 
     // 预计算每条线路的框尺寸
@@ -1143,20 +1147,20 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed, nameMode, nar
     const totalW = COLS * frameW + (COLS - 1) * frameGap;
 
     let tfX, tfY, availTop, availBottom, scaleFromBottom;
-    const MARGIN = 0.5;
+    const MARGIN = 3.2;
 
     switch (nameMode || line.nameDisplayMode) {
         case 'alternating': {
             const cnName = (station.name || '').trim();
             const secName = (station.secondaryName || '').trim();
-            const cnSize = line.nameFontSize;
+            const cnSize = line.nameFontSize * SCALE;
             const secSize = cnSize / 2;
 
             // 奇数站(站1/3/5)文字在上方 → 框在文字上方
             // 偶数站(站2/4/6)文字在下方 → 框在文字下方
             const isAbove = nameIndex % 2 === 0;
             const hasSec = !!secName;
-            const gap = hasSec ? Math.max(1, secSize * 0.3) : 0;
+            const gap = hasSec ? Math.max(6.4, secSize * 0.3) : 0;
             const totalTextHeight = hasSec ? (cnSize + gap + secSize) : cnSize;
 
             // 水平：居中对齐站点圆圈
@@ -1421,12 +1425,13 @@ function buildProhibitionIcon(cx, cy, r) {
 function renderDoorSideDisplay() {
     console.log('[PIDS] renderDoorSideDisplay 开始执行, 方向:', line.direction);
     try {
-    const viewBoxWidth = 300;
-    const shortLength = 120;    // 停站画面线路长度（决定车站间距，5 站时间距 30）
+    const viewBoxWidth = 2700;
+    const shortLength = 1080;    // 停站画面线路长度（决定车站间距，5 站时间距 270）
     const rectX = (viewBoxWidth - shortLength) / 2;
-    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - line.strokeWidth) + line.strokeWidth / 2; // 停站画面线路固定居中 (0.5)
-    const iconSize = line.iconSize;
-    const strokeW = Math.max(0.5, iconSize / 10);
+    const lineW = line.strokeWidth * SCALE; // 线路粗细（2700 坐标系）
+    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - lineW) + lineW / 2; // 停站画面线路固定居中 (0.5)
+    const iconSize = line.iconSize * SCALE;
+    const strokeW = Math.max(3.2, iconSize / 10);
     const isLeftDir = (line.direction === 'left');
 
     // --- 计算要显示的 5 个车站（以当前站为中心） ---
@@ -1473,8 +1478,8 @@ function renderDoorSideDisplay() {
     const rightExtColor = isLeftDir ? '#999' : line.color;
 
     // --- 线路分段 ---
-    const lineY = lineCenterY - line.strokeWidth / 2; // 与 lineCenterY 一致，固定居中
-    const lineH = line.strokeWidth;
+    const lineY = lineCenterY - lineW / 2; // 与 lineCenterY 一致，固定居中
+    const lineH = lineW;
     let lineSvg = '';
 
     // 左延伸段
@@ -1562,7 +1567,7 @@ function renderDoorSideDisplay() {
   <rect x="${x}" y="${y}" width="${renderSize}" height="${renderSize}" rx="${renderSize / 2}" ry="${renderSize / 2}" fill="${stationFill}" stroke="${stationStroke}" stroke-width="${strokeW}"${stationGlow} />`;
             // 到站时间（未过站且非当前站）
             if (arrivalTimes[i] > 0 && !isCurrentSt) {
-                const timeFontSize = Math.max(1.2, iconSize * 0.5);
+                const timeFontSize = Math.max(7.68, iconSize * 0.5);
                 stationsSvg += `
   <text x="${cx}" y="${lineCenterY}" text-anchor="middle" dominant-baseline="central" font-size="${timeFontSize}" font-family="${FONT_FAMILY}" fill="#000">${arrivalTimes[i]}</text>`;
             }
@@ -1581,8 +1586,8 @@ function renderDoorSideDisplay() {
 
     // --- 站间箭头 ---
     let arrowsSvg = '';
-    const arrowW = line.strokeWidth * line.arrowScaleW * 2;
-    const arrowH = line.strokeWidth * line.arrowScaleH;
+    const arrowW = lineW * line.arrowScaleW * 2;
+    const arrowH = lineW * line.arrowScaleH;
     if (V > 1) {
         for (let si = 0; si < V - 1; si++) {
             const cx1 = firstCx + spacing * si;
@@ -1609,25 +1614,25 @@ function renderDoorSideDisplay() {
     // --- 左侧面板：车门 + 禁止图标 + 提示文字 ---
     // 门由 doorl/doorr 两扇拼合，静止显示；禁止图标按 currentStationBlink 闪烁
     // 车门整体上移 10，提示文字「对侧开门」放在车门下方
-    const doorH = 36;                       // 车门高度（viewBox 单位）
+    const doorH = 230.4;                    // 车门高度（viewBox 单位，×6.4）
     const doorW = doorH * 62 / 51;          // 车门宽度（原始宽高比 62:51）
-    const doorX = 10;                       // 车门左上角 X（左对齐）
-    const doorCenterY = lineCenterY - 5;    // 车门垂直中心（整体上移 5）
+    const doorX = 89.98;                    // 车门左上角 X（左对齐，×6.4）
+    const doorCenterY = lineCenterY - 32;   // 车门垂直中心（整体上移 32）
     const doorY = doorCenterY - doorH / 2;  // 车门左上角 Y
     const doorCx = doorX + doorW / 2;       // 车门中心 X
-    const prohibitionR = 11;                // 禁止图标半径
+    const prohibitionR = 70.4;              // 禁止图标半径（×6.4）
     const doorSvg = buildDoorGraphic(doorX, doorY, doorH);
     const prohibitionSvg = currentStationBlink
         ? buildProhibitionIcon(doorCx, doorCenterY, prohibitionR)
         : '';
     // 提示文字：车门下方、与车门居中对齐，沿用站名文字颜色
     const leftColor = line.stationNameColor;
-    const labelY = doorY + doorH + 6;       // 文字垂直中心（车门底边下方留 6 空隙）
+    const labelY = doorY + doorH + 38.4;    // 文字垂直中心（车门底边下方留 38.4 空隙）
     const labelText = `  <g transform="translate(${doorCx}, ${labelY})">
     <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
-          font-size="6" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">对侧开门</text>
-    <text x="0" y="5" text-anchor="middle" dominant-baseline="central"
-          font-size="3" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on the other side</text>
+          font-size="38.4" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">对侧开门</text>
+    <text x="0" y="32" text-anchor="middle" dominant-baseline="central"
+          font-size="19.2" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on the other side</text>
   </g>`;
     const leftPanel = doorSvg + (prohibitionSvg ? '\n  ' + prohibitionSvg : '') + '\n  ' + labelText;
 
@@ -1639,21 +1644,21 @@ function renderDoorSideDisplay() {
 
     const rightColor = line.stationNameColor;
     // 时间文字放大，外包线路色圆角描边（无色填充，位于线路显示区右侧之外）
-    const rightText = `  <g transform="translate(265, ${lineCenterY})">
-    <rect x="-15" y="-25" width="40" height="50" rx="3" fill="none" stroke="${line.color}" stroke-width="1"/>
-    <text x="5" y="-8" text-anchor="middle" dominant-baseline="central"
-          font-size="12" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${hhmm}</text>
-    <text x="5" y="3" text-anchor="middle" dominant-baseline="central"
-          font-size="5" font-family="${FONT_FAMILY}" fill="${rightColor}">${yyyymmdd}</text>
-    <text x="5" y="12" text-anchor="middle" dominant-baseline="central"
-          font-size="6" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
+    const rightText = `  <g transform="translate(2385.02, ${lineCenterY})">
+    <rect x="-96" y="-160" width="256" height="320" rx="19.2" fill="none" stroke="${line.color}" stroke-width="6.4"/>
+    <text x="32" y="-51.2" text-anchor="middle" dominant-baseline="central"
+          font-size="76.8" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${hhmm}</text>
+    <text x="32" y="19.2" text-anchor="middle" dominant-baseline="central"
+          font-size="32" font-family="${FONT_FAMILY}" fill="${rightColor}">${yyyymmdd}</text>
+    <text x="32" y="76.8" text-anchor="middle" dominant-baseline="central"
+          font-size="38.4" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
   </g>`;
 
     // --- 组装 SVG ---
-    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
+    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;">
   <defs>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="0.8" result="blur" />
+      <feGaussianBlur stdDeviation="5.12" result="blur" />
       <feMerge>
         <feMergeNode in="blur" />
         <feMergeNode in="SourceGraphic" />
@@ -1833,9 +1838,9 @@ function buildCoachGraphic(shape, x, y, carW, carH) {
 function buildTrainGraphic(cars, centerX, bottomY, maxWidth) {
     const N = cars.length;
     if (N === 0) return '';
-    const gap = 1.5;            // 车厢间隙
+    const gap = 9.6;            // 车厢间隙（×6.4）
     const unit = 61 / 31;       // 车厢宽高比
-    let carH = 14;
+    let carH = 89.6;
     let carW = carH * unit;
     let totalW = N * carW + (N - 1) * gap;
     // 宽度超限 → 按可用宽度收缩车高
@@ -1870,39 +1875,47 @@ function buildTrainGraphic(cars, centerX, bottomY, maxWidth) {
         }
         svg += '\n  ' + buildCoachGraphic(shape, x, bottomY - carH, carW, carH);
         // 车厢号
-        svg += `\n  <text x="${x + carW / 2}" y="${bottomY - carH / 2}" text-anchor="middle" dominant-baseline="central" font-size="${Math.min(6, carH * 0.5)}" font-family="${FONT_FAMILY}" fill="#000">${car.number}</text>`;
+        svg += `\n  <text x="${x + carW / 2}" y="${bottomY - carH / 2}" text-anchor="middle" dominant-baseline="central" font-size="${Math.min(38.4, carH * 0.5)}" font-family="${FONT_FAMILY}" fill="#000">${car.number}</text>`;
     }
     return svg;
 }
 
 
 /**
- * buildStationFacilitySvg - 生成「列车 + 轨道」站台设施 SVG 片段
+ * buildStationFacilitySvg - 生成「列车 + 轨道 + 站厅」站台设施 SVG 片段
  *
  * 轨道为深灰色水平线，始终位于列车下方；轨道垂直位置由车站类型决定：
  *   - 地下站（isUnderground=true）：轨道在显示区底部
  *   - 地上站（isUnderground=false）：轨道在显示区上部
- * 列车紧贴轨道上方，水平居中于中部面板（x 64~244）。
+ * 站厅为细黑线，垂直位置随车站类型独立设定：
+ *   - 地下站：站厅在上侧(61)
+ *   - 地上站：站厅在下侧(329.8)
+ * 列车紧贴轨道上方，水平居中于中部面板（x 576~2196）。
  *
  * @param  {Object} curSt - 当前车站对象（含 isUnderground）
  * @returns {string} SVG 片段字符串
  */
 function buildStationFacilitySvg(curSt) {
-    const panelX = 64;
-    const panelW = 180;
+    const panelX = 576;
+    const panelW = 1620;
     const panelCenterX = panelX + panelW / 2;
 
-    // 轨道垂直位置：地下站→底部(60)，地上站→上部(18)
-    const railY = curSt.isUnderground ? 60 : 18;
+    // 轨道垂直位置：地下站→底部(384)，地上站→上部(115.2)
+    const railY = curSt.isUnderground ? 384 : 150;
     const railColor = '#555';   // 深灰色轨道线
+    // 站厅细黑线垂直位置：地下站→上侧(61)，地上站→下侧(329.8)，可独立调整
+    const hallY = curSt.isUnderground ? 100 : 320;
+    const hallColor = '#000';   // 黑色站厅线
+    const hallH = 3.2;          // 细黑线高度
 
-    let svg = `  <rect x="${panelX}" y="${railY}" width="${panelW}" height="1.5" fill="${railColor}"/>`;
+    let svg = `  <rect x="${panelX}" y="${railY}" width="${panelW}" height="9.6" fill="${railColor}"/>`;
+    svg += `\n  <rect x="${panelX}" y="${hallY}" width="${panelW}" height="${hallH}" fill="${hallColor}"/>`;
 
     // 列车（底边紧贴轨道顶部，水平居中）
     const cars = (line.trainCars && line.trainCars.length > 0)
         ? line.trainCars.slice()
         : CONFIG.defaultTrainCars.map(c => ({ ...c }));
-    svg += buildTrainGraphic(cars, panelCenterX, railY, panelW - 4);
+    svg += buildTrainGraphic(cars, panelCenterX, railY, panelW - 25.6);
 
     return svg;
 }
@@ -1922,24 +1935,25 @@ function buildStationFacilitySvg(curSt) {
 function renderThisSideDisplay() {
     console.log('[PIDS] renderThisSideDisplay 开始执行, 站名:', stations[currentStationIndex] && stations[currentStationIndex].name);
     try {
-    const viewBoxWidth = 300;
-    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - line.strokeWidth) + line.strokeWidth / 2;
+    const viewBoxWidth = 2700;
+    const lineW = line.strokeWidth * SCALE; // 线路粗细（2700 坐标系）
+    const lineCenterY = 0.5 * (VIEWBOX_HEIGHT - lineW) + lineW / 2;
     const curSt = stations[currentStationIndex];
     const rightColor = line.stationNameColor;
 
     // --- 左侧面板：开门动画 + 本侧开门提示 ---
-    const doorH = 36;                       // 车门高度（viewBox 单位）
+    const doorH = 230.4;                    // 车门高度（viewBox 单位，×6.4）
     const doorW = doorH * 62 / 51;          // 车门宽度（原始宽高比 62:51）
-    const doorX = 10;                       // 车门左上角 X（左对齐）
-    const doorCenterY = lineCenterY - 5;    // 车门垂直中心（与对侧开门一致）
+    const doorX = 89.98;                    // 车门左上角 X（左对齐，×6.4）
+    const doorCenterY = lineCenterY - 32;   // 车门垂直中心（与对侧开门一致）
     const doorY = doorCenterY - doorH / 2;  // 车门左上角 Y
     const doorCx = doorX + doorW / 2;       // 车门中心 X
     const doorSvg = buildDoorGraphic(doorX, doorY, doorH, doorOpenAmount);
     // 门全开后：两门之间绿色上箭头自底向顶循环运动（缓入缓出 + 两端淡入淡出）
     let arrowSvg = '';
     if (doorArrowActive) {
-        const arrowTravel = doorH - 12;                 // 12 = 箭头自身高度（viewBox 单位）
-        const arrowBottom = doorY + doorH - 6;          // 行程底：箭头贴门底边
+        const arrowTravel = doorH - 76.8;               // 76.8 = 箭头自身高度（viewBox 单位，×6.4）
+        const arrowBottom = doorY + doorH - 38.4;       // 行程底：箭头贴门底边
         // 缓动：smoothstep（p²(3-2p)）缓入缓出，起点加速、终点减速
         const raw = doorArrowProgress;
         const eased = raw * raw * (3 - 2 * raw);
@@ -1950,12 +1964,12 @@ function renderThisSideDisplay() {
         arrowSvg = '\n  ' + buildDoorArrowSvg(doorCx, arrowCy, arrowOp);
     }
     const leftColor = line.stationNameColor;
-    const labelY = doorY + doorH + 6;       // 文字垂直中心（车门底边下方留 6 空隙）
+    const labelY = doorY + doorH + 38.4;    // 文字垂直中心（车门底边下方留 38.4 空隙）
     const labelText = `  <g transform="translate(${doorCx}, ${labelY})">
     <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
-          font-size="6" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">本侧开门</text>
-    <text x="0" y="5" text-anchor="middle" dominant-baseline="central"
-          font-size="3" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on this side</text>
+          font-size="38.4" font-family="${FONT_FAMILY}" fill="${leftColor}" font-weight="bold">本侧开门</text>
+    <text x="0" y="32" text-anchor="middle" dominant-baseline="central"
+          font-size="19.2" font-family="${FONT_FAMILY}" fill="${leftColor}">Doors open on this side</text>
   </g>`;
     const leftPanel = doorSvg + arrowSvg + '\n  ' + labelText;
 
@@ -1964,35 +1978,35 @@ function renderThisSideDisplay() {
 
     // --- 右侧面板：10s 本站/站名 ↔ 2s 日期 循环 ---
     // 外框与对侧开门时间面板一致：线路色圆角描边、无色填充，固定 40×50
-    const rightX = 265;  // 与对侧开门时间面板 translate(265) 对齐
+    const rightX = 2385.02;  // 与对侧开门时间面板 translate(2385.02) 对齐（×6.4）
     const displayTime = getDisplayTime();
     const yyyymmdd = `${displayTime.getFullYear()}/${String(displayTime.getMonth() + 1).padStart(2, '0')}/${String(displayTime.getDate()).padStart(2, '0')}`;
     const dayOfWeek = `星期${getDayOfWeek(displayTime)}`;
     const stationName = curSt.name || '';
 
-    const frameRect = `    <rect x="-15" y="-25" width="40" height="50" rx="3" fill="none" stroke="${line.color}" stroke-width="1"/>`;
+    const frameRect = `    <rect x="-96" y="-160" width="256" height="320" rx="19.2" fill="none" stroke="${line.color}" stroke-width="6.4"/>`;
 
     let rightPanel = '';
     if (thisSidePanelMode === 'date') {
         rightPanel = `  <g transform="translate(${rightX}, ${lineCenterY})">
     ${frameRect}
-    <text x="5" y="-3" text-anchor="middle" dominant-baseline="central" font-size="6" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${yyyymmdd}</text>
-    <text x="5" y="4" text-anchor="middle" dominant-baseline="central" font-size="4" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
+    <text x="32" y="-19.2" text-anchor="middle" dominant-baseline="central" font-size="38.4" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">${yyyymmdd}</text>
+    <text x="32" y="25.6" text-anchor="middle" dominant-baseline="central" font-size="25.6" font-family="${FONT_FAMILY}" fill="${rightColor}">${dayOfWeek}</text>
   </g>`;
     } else {
         let content = `  <g transform="translate(${rightX}, ${lineCenterY})">
     ${frameRect}
-    <text x="5" y="-4" text-anchor="middle" dominant-baseline="central" font-size="8" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">本站</text>
-    <text x="5" y="5" text-anchor="middle" dominant-baseline="central" font-size="5" font-family="${FONT_FAMILY}" fill="${rightColor}">${stationName}</text>
+    <text x="32" y="-25.6" text-anchor="middle" dominant-baseline="central" font-size="51.2" font-family="${FONT_FAMILY}" fill="${rightColor}" font-weight="bold">本站</text>
+    <text x="32" y="32" text-anchor="middle" dominant-baseline="central" font-size="32" font-family="${FONT_FAMILY}" fill="${rightColor}">${stationName}</text>
   </g>`;
         // 换乘站：在「本站」上方添加换乘线路框
         // buildTransferFrames 的 'below' 模式 = 框在站点/文字上方
         const isTransferStation = curSt.type === '换乘站'
             && curSt.transferLines && curSt.transferLines.length > 0;
         if (isTransferStation) {
-            const halfIcon = line.iconSize / 2;
-            const textTop = lineCenterY - 4 - 8 / 2;  // 「本站」文字顶部（central 基线）
-            const synthCy = textTop - 2 + halfIcon + TEXT_PAD;  // 框底边 = textTop - 2
+            const halfIcon = line.iconSize * SCALE / 2;
+            const textTop = lineCenterY - 25.6 - 51.2 / 2;  // 「本站」文字顶部（central 基线，×6.4）
+            const synthCy = textTop - 12.8 + halfIcon + TEXT_PAD;  // 框底边 = textTop - 12.8
             // narrow=true：本侧开门窄面板，2 条换乘单列纵向（①/②），3 条及以上回 2 列网格（末行居中）
             const framesSvg = buildTransferFrames(curSt, rightX, synthCy, 0, false, 'below', true);
             if (framesSvg) content = framesSvg + '\n  ' + content;
@@ -2001,7 +2015,7 @@ function renderThisSideDisplay() {
     }
 
     // --- 组装 SVG ---
-    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
+    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;">
   ${leftPanel}
   ${midPanel}
   ${rightPanel}
@@ -2032,16 +2046,18 @@ function renderPIDSDisplay() {
     // 离开停站画面 → 清理本侧开门状态（定时器、动画进度）
     handleStopDisplaysEnd();
 
-    const viewBoxWidth = 300;
-    const LINE_EXTENSION = isDeparted ? 0 : 20;
-    const rectX = (viewBoxWidth - line.length) / 2;
+    const viewBoxWidth = 2700;
+    const LINE_EXTENSION = isDeparted ? 0 : 180;
+    const lineLen = line.length * viewBoxWidth;
+    const rectX = (viewBoxWidth - lineLen) / 2;
     const lineStartX = rectX - LINE_EXTENSION;
-    const lineEndX = rectX + line.length + LINE_EXTENSION;
-    const lineCenterY = getLineY() + line.strokeWidth / 2;
+    const lineEndX = rectX + lineLen + LINE_EXTENSION;
+    const lineW = line.strokeWidth * SCALE; // 线路粗细（2700 坐标系）
+    const lineCenterY = getLineY() + lineW / 2;
 
     // 站点图标在 viewBox 中的尺寸（由控制面板全局设置）
-    const iconSize = line.iconSize;
-    const strokeW = Math.max(0.5, iconSize / 10);
+    const iconSize = line.iconSize * SCALE;
+    const strokeW = Math.max(3.2, iconSize / 10);
 
     // 构建站点图标 + 站名 SVG
     let stationsSvg = '';
@@ -2053,7 +2069,7 @@ function renderPIDSDisplay() {
 
         // 起终点放在线路端头
         let firstCx = rectX;
-        let lastCx = rectX + line.length;
+        let lastCx = rectX + lineLen;
 
         // 边界检测：针对视觉首末站
         const firstExtent = estimateStationExtent(stations[visualFirstIdx], visualFirstIdx);
@@ -2084,7 +2100,7 @@ function renderPIDSDisplay() {
             const station = stations[i];
             const cx = N > 1
                 ? firstCx + spacing * vi
-                : rectX + line.length / 2;
+                : rectX + lineLen / 2;
             stationCxs.push(cx);
             stationRenderData[vi] = {
                 vi, i, station, cx,
@@ -2180,7 +2196,7 @@ function renderPIDSDisplay() {
 
                 // 到站时间（仅未过站且非换乘态且非当前站显示，当前站时间为0无意义）
                 if (showTime && !isCurrent) {
-                    const timeFontSize = Math.max(1.2, iconSize * 0.5);
+                    const timeFontSize = Math.max(7.68, iconSize * 0.5);
                     const timeFill = isCurrent ? '#fff' : '#000';
                     stationsSvg += `
   <text x="${cx}" y="${lineCenterY}" text-anchor="middle" dominant-baseline="central" font-size="${timeFontSize}" font-family="${FONT_FAMILY}" fill="${timeFill}">${arrivalTime}</text>`;
@@ -2207,8 +2223,8 @@ function renderPIDSDisplay() {
             for (let si = 0; si < stations.length - 1; si++) {
                 const cx1 = stationCxs[si];
                 const cx2 = stationCxs[si + 1];
-                const arrowW = line.strokeWidth * line.arrowScaleW;
-                const arrowH = line.strokeWidth * line.arrowScaleH;
+                const arrowW = lineW * line.arrowScaleW;
+                const arrowH = lineW * line.arrowScaleH;
 
                 // 箭头位置：两站居中
                 const arrowCx = (cx1 + cx2) / 2;
@@ -2250,21 +2266,21 @@ function renderPIDSDisplay() {
 
         // 已过段（灰色）
         if (passedEnd > passedStart) {
-            lineSvg += `<rect x="${passedStart}" y="${getLineY()}" width="${passedEnd - passedStart}" height="${line.strokeWidth}" fill="#999" rx="0"/>`;
+            lineSvg += `<rect x="${passedStart}" y="${getLineY()}" width="${passedEnd - passedStart}" height="${lineW}" fill="#999" rx="0"/>`;
         }
         // 未过段（线路色）
         if (upcomingEnd > upcomingStart) {
-            lineSvg += `\n  <rect x="${upcomingStart}" y="${getLineY()}" width="${upcomingEnd - upcomingStart}" height="${line.strokeWidth}" fill="${line.color}" rx="0"/>`;
+            lineSvg += `\n  <rect x="${upcomingStart}" y="${getLineY()}" width="${upcomingEnd - upcomingStart}" height="${lineW}" fill="${line.color}" rx="0"/>`;
         }
     } else {
         // 无当前站 → 全彩色
-        lineSvg = `<rect x="${lineStartX}" y="${getLineY()}" width="${lineEndX - lineStartX}" height="${line.strokeWidth}" fill="${line.color}" rx="2"/>`;
+        lineSvg = `<rect x="${lineStartX}" y="${getLineY()}" width="${lineEndX - lineStartX}" height="${lineW}" fill="${line.color}" rx="2"/>`;
     }
 
-    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="none" style="width:100%;height:100%;">
+    const pidsSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBoxWidth} ${VIEWBOX_HEIGHT}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;">
   <defs>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="0.8" result="blur" />
+      <feGaussianBlur stdDeviation="5.12" result="blur" />
       <feMerge>
         <feMergeNode in="blur" />
         <feMergeNode in="SourceGraphic" />
@@ -2930,7 +2946,7 @@ function resetLine() {
     stationNameColorInput.value = line.stationNameColor;
     stationNameColorPreview.style.backgroundColor = line.stationNameColor;
     lengthInput.value = line.length;
-    lengthValue.textContent = line.length;
+    lengthValue.textContent = Math.round(line.length * 100) + '%';
     strokeInput.value = line.strokeWidth;
     strokeValue.textContent = line.strokeWidth;
     positionInput.value = line.positionY;
@@ -3372,8 +3388,8 @@ useSystemTimeCheck.addEventListener('change', () => {
 });
 
 lengthInput.addEventListener('input', (e) => {
-    line.length = parseInt(e.target.value, 10);
-    lengthValue.textContent = line.length;
+    line.length = parseFloat(e.target.value);
+    lengthValue.textContent = Math.round(line.length * 100) + '%';
     renderPIDSDisplay();
     scheduleSave();
 });
@@ -3516,7 +3532,7 @@ bannerTextColorSelect.value = line.bannerTextColor;
 stationNameColorInput.value = line.stationNameColor;
 stationNameColorPreview.style.backgroundColor = line.stationNameColor;
 lengthInput.value = line.length;
-lengthValue.textContent = line.length;
+lengthValue.textContent = Math.round(line.length * 100) + '%';
 strokeInput.value = line.strokeWidth;
 strokeValue.textContent = line.strokeWidth;
 positionInput.value = line.positionY;
