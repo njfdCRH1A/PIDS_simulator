@@ -994,24 +994,6 @@ body {
     flex-shrink: 0;
 }
 
-.transfer-line-font-size {
-    width: 38px;
-    padding: 3px 2px;
-    background: var(--item-bg);
-    color: var(--text-primary);
-    border: 1px solid var(--input-border);
-    border-radius: 4px;
-    font-size: 0.68rem;
-    font-family: inherit;
-    text-align: center;
-    outline: none;
-    flex-shrink: 0;
-}
-
-.transfer-line-font-size:focus {
-    border-color: #e94560;
-}
-
 .arrow-blink-input {
     width: 72px;
     padding: 4px 6px;

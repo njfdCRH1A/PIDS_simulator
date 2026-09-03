@@ -331,11 +331,6 @@ function loadState() {
         stations.forEach(s => {
             if (!s.transferLines) s.transferLines = [];
             if (s.transferLines.length > 0) s.type = '换乘站';
-            // 迁移旧 transferLine 数据：补充默认字号字段
-            s.transferLines.forEach(tl => {
-                if (tl.cnFontSize == null) tl.cnFontSize = 3.0;
-                if (tl.enFontSize == null) tl.enFontSize = 2.0;
-            });
             // 迁移：旧数据中缺少 doorSide 字段时默认为本侧开门
             if (s.doorSide === undefined) s.doorSide = true;
             // 迁移：旧数据中缺少 isUnderground 字段时默认为地上站
@@ -986,19 +981,58 @@ function buildTransferIconGray(cx, cy, size) {
 }
 
 /**
+ * getTransferDigitLayout - 「X号线」数字下沉式布局的几何参数
+ *
+ * 换乘线路名形如「X号线」且有英文名时，采用数字下沉式：
+ *   左侧大字号数字（高约 1.5~2 行），右侧两行 —— 上行「号线」、下行「Line X」。
+ * 非「X号线」或无英文名返回 null（走普通布局）。
+ *
+ * @param  {Object} lineData - {color, nameCN, nameEN, textMode}
+ * @returns {Object|null} { digits, rest, enText, bigFS, digitGap, digitW, textColW, textH, segGap, cnFS, enFS } 或 null
+ */
+function getTransferDigitLayout(lineData) {
+    const cnFS = 4.0 * SCALE;   // 换乘字号固定：中文 4 号
+    const enFS = 2.0 * SCALE;   // 换乘字号固定：英文 2 号
+    const cn = (lineData.nameCN || '');
+    const m = cn.match(/^(\d+)(号线.*)$/);
+    if (!m) return null;
+    const enText = (lineData.nameEN || '').replace(/\\n/g, '\n').split('\n')[0];
+    if (!enText) return null;   // 需英文名才有下行「Line X」
+    const bigFS = cnFS * 2.0;       // 左侧大数字字号（约 2 行高）
+    const digitGap = cnFS * 0.15;   // 数字与右侧文字间距（收紧）
+    const digitW = bigFS * 0.5 * m[1].length;   // 数字串宽（数字约 0.5em）
+    const restW = m[2].length * cnFS;           // 「号线…」全角宽度
+    const enW = enText.length * enFS * 0.6;
+    const textColW = Math.max(restW, enW);      // 右列两行较宽者
+    const lnGap = 1.0;
+    const segGap = 3.2;
+    const textH = cnFS * lnGap + segGap + enFS * lnGap;  // 右侧两行总高
+    return { digits: m[1], rest: m[2], enText, bigFS, digitGap, digitW, textColW, textH, segGap, cnFS, enFS };
+}
+
+/**
  * estimateTransferFrameSize - 估算换乘线路框的 SVG 尺寸
  *
  * 根据文字内容、字号、行数估算框宽和框高。
  * CN 每字符宽度 ≈ 字号，EN 每字符宽度 ≈ 字号 × 0.6。
+ * 「X号线」数字下沉式按左侧大数字 + 右侧两行计算。
  *
- * @param  {Object} lineData - {color, nameCN, nameEN, textMode, cnFontSize, enFontSize}
+ * @param  {Object} lineData - {color, nameCN, nameEN, textMode}
  * @returns {Object} { w, h, cnLines, enLines, cnFS, enFS }
  */
 function estimateTransferFrameSize(lineData) {
+    // 「X号线」数字下沉式：按数字 + 两行文字算宽高
+    const dl = getTransferDigitLayout(lineData);
+    if (dl) {
+        const padX = 6.4, padY = 3.2;
+        const w = Math.max(64, dl.digitW + dl.digitGap + dl.textColW + padX);
+        const h = 50;   // 换乘框高度固定 50
+        return { w, h, cnFS: dl.cnFS, enFS: dl.enFS };
+    }
     const cnLines = (lineData.nameCN || '').replace(/\\n/g, '\n').split('\n');
     const enLines = (lineData.nameEN || '').replace(/\\n/g, '\n').split('\n');
-    const cnFS = (lineData.cnFontSize || 3.0) * SCALE;
-    const enFS = (lineData.enFontSize || 2.0) * SCALE;
+    const cnFS = 4.0 * SCALE;   // 换乘字号固定：中文 4 号
+    const enFS = 2.0 * SCALE;   // 换乘字号固定：英文 2 号
     const padX = 6.4;  // 左右各 3.2（×6.4）
     const padY = 3.2;  // 上 3.2、下 0
 
@@ -1028,7 +1062,7 @@ function estimateTransferFrameSize(lineData) {
  *
  * 框尺寸根据文字内容自适应。支持 \n 换行，CN/EN 各自多行渲染。
  *
- * @param  {Object} lineData - {color, nameCN, nameEN, textMode, cnFontSize, enFontSize}
+ * @param  {Object} lineData - {color, nameCN, nameEN, textMode}
  * @param  {number} x        - 框左上角 X
  * @param  {number} y        - 框左上角 Y
  * @param  {number} frameW   - 框宽度
@@ -1040,8 +1074,8 @@ function buildTransferLineFrame(lineData, x, y, frameW, frameH, isPassed) {
     const rx = frameW * (5.4 / 62);
     const fillColor = isPassed ? '#ccc' : lineData.color;
     const textColor = isPassed ? '#999' : (lineData.textMode === 'light' ? '#ffffff' : '#000000');
-    const cnFS = (lineData.cnFontSize || 3.0) * SCALE;
-    const enFS = (lineData.enFontSize || 2.0) * SCALE;
+    const cnFS = 4.0 * SCALE;   // 换乘字号固定：中文 4 号
+    const enFS = 2.0 * SCALE;   // 换乘字号固定：英文 2 号
     const lnGap = 1.0;
 
     const cnLines = (lineData.nameCN || '').replace(/\\n/g, '\n').split('\n');
@@ -1062,6 +1096,31 @@ function buildTransferLineFrame(lineData, x, y, frameW, frameH, isPassed) {
     let svg = `<g>
     <rect x="${x}" y="${y}" width="${frameW}" height="${frameH}" rx="${rx}" ry="${rx}"
           fill="${fillColor}"/>`;
+
+    // 「X号线」数字下沉式：左侧大数字 + 右侧两行（上行「号线」、下行「Line X」）
+    const dl = getTransferDigitLayout(lineData);
+    if (dl) {
+        const cnStartY = y + (frameH - dl.textH) / 2;                 // 「号线」行顶（右列两行整体垂直居中）
+        const enStartY = cnStartY + dl.cnFS + dl.segGap;              // 「Line X」行顶
+        const digitY = cnStartY + 3;    // 大数字字形中心与右列文字块中心对齐
+        const contentW = dl.digitW + dl.digitGap + dl.textColW;
+        const startX = x + (frameW - contentW) / 2;      // 组水平居中
+        const textX = startX + dl.digitW + dl.digitGap;  // 右列左对齐起点
+        const escRest = dl.rest.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const escEn = dl.enText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        svg += `
+    <text x="${startX + dl.digitW / 2}" y="${digitY}" text-anchor="middle" dominant-baseline="hanging"
+          font-size="${dl.bigFS}" font-family="${FONT_FAMILY}" fill="${textColor}">${dl.digits}</text>`;
+        svg += `
+    <text x="${textX}" y="${cnStartY}" text-anchor="start" dominant-baseline="hanging"
+          font-size="${cnFS}" font-family="${FONT_FAMILY}" fill="${textColor}">${escRest}</text>`;
+        svg += `
+    <text x="${textX}" y="${enStartY}" text-anchor="start" dominant-baseline="hanging"
+          font-size="${enFS}" font-family="${FONT_FAMILY}" fill="${textColor}">${escEn}</text>`;
+        svg += `
+  </g>`;
+        return svg;
+    }
 
     // CN 多行
     if (cnLines.length > 0) {
@@ -1124,27 +1183,32 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed, nameMode, nar
     const halfIcon = line.iconSize * SCALE / 2;
     const count = lines.length;
 
-    // 预计算每条线路的框尺寸
+    // 预计算每条线路的框尺寸（各框独立宽度/高度，不再统一取最宽）
     const sizes = lines.map(ld => estimateTransferFrameSize(ld));
-    const frameW = Math.max(...sizes.map(s => s.w));  // 统一宽度 = 最宽框
-    const frameHs = sizes.map(s => s.h);               // 各框各自高度
+    const frameWs = sizes.map(s => s.w);   // 各框各自宽度
+    const frameHs = sizes.map(s => s.h);   // 各框各自高度
 
     // 布局：本侧开门窄面板 2 条换乘时单列纵向（①/②）；其余每行最多 2 列，末行居中
     const COLS = (narrow && count === 2) ? 1 : Math.min(count, 2);
     const ROWS = Math.ceil(count / COLS);
 
-    // 每行高度 = 该行最高框
+    // 每行高度 = 该行最高框；每行宽度 = 该行各框宽度之和 + 行内间距
     const rowHeights = [];
+    const rowWidths = [];
     for (let r = 0; r < ROWS; r++) {
-        let maxH = 0;
+        let maxH = 0, sumW = 0;
         for (let c = 0; c < COLS; c++) {
             const i = r * COLS + c;
-            if (i < count) maxH = Math.max(maxH, frameHs[i]);
+            if (i < count) {
+                maxH = Math.max(maxH, frameHs[i]);
+                sumW += frameWs[i] + (c > 0 ? frameGap : 0);
+            }
         }
         rowHeights.push(maxH);
+        rowWidths.push(sumW);
     }
     const totalH = rowHeights.reduce((sum, h) => sum + h, 0) + (ROWS - 1) * frameGap;
-    const totalW = COLS * frameW + (COLS - 1) * frameGap;
+    const totalW = Math.max(...rowWidths);  // 组宽 = 最宽那一行
 
     let tfX, tfY, availTop, availBottom, scaleFromBottom;
     const MARGIN = 3.2;
@@ -1236,19 +1300,20 @@ function buildTransferFrames(station, cx, cy, nameIndex, isPassed, nameMode, nar
         svg += `\n  <g transform="translate(${groupCX}, ${groupCY}) scale(${scale}) translate(${-groupCX}, ${-groupCY})">`;
     }
 
-    // 逐行逐列生成，各框使用各自的 frameH
+    // 逐行逐列生成，各框使用各自的 frameW/frameH（独立宽度、独立高度）
     let fy = tfY;
     let idx = 0;
     for (let r = 0; r < ROWS; r++) {
         const framesInRow = Math.min(count - idx, COLS);
-        const rowW = framesInRow * frameW + (framesInRow - 1) * frameGap;
-        const rowOffsetX = (totalW - rowW) / 2;  // 行内居中
+        const rowOffsetX = (totalW - rowWidths[r]) / 2;  // 行内居中
 
+        let fx = tfX + rowOffsetX;  // 列 x 连续累加（各框宽度不同）
         for (let c = 0; c < framesInRow; c++) {
-            const fx = tfX + rowOffsetX + c * (frameW + frameGap);
+            const fw = frameWs[idx];
             const fh = frameHs[idx];
-            svg += '\n  ' + buildTransferLineFrame(lines[idx], fx, fy, frameW, fh, isPassed);
+            svg += '\n  ' + buildTransferLineFrame(lines[idx], fx, fy, fw, fh, isPassed);
             idx++;
+            fx += fw + frameGap;
         }
         fy += rowHeights[r] + frameGap;
     }
@@ -1902,7 +1967,7 @@ function buildStationFacilitySvg(curSt) {
 
     // 轨道垂直位置：地下站→底部(384)，地上站→上部(115.2)
     const railY = curSt.isUnderground ? 384 : 150;
-    const railColor = '#555';   // 深灰色轨道线
+    const railColor = line.color;   // 轨道颜色 = 线路色（随控制面板「线路颜色」同步）
     // 站厅细黑线垂直位置：地下站→上侧(61)，地上站→下侧(329.8)，可独立调整
     const hallY = curSt.isUnderground ? 100 : 320;
     const hallColor = '#000';   // 黑色站厅线
@@ -2516,36 +2581,6 @@ function createTransferLineRow(station, lineData, index) {
     });
     colorWrapper.appendChild(colorInput);
 
-    // 中文字号
-    const cnFsInput = document.createElement('input');
-    cnFsInput.type = 'number';
-    cnFsInput.className = 'transfer-line-font-size';
-    cnFsInput.value = lineData.cnFontSize || 3.0;
-    cnFsInput.step = '0.1';
-    cnFsInput.min = '0.8';
-    cnFsInput.max = '8';
-    cnFsInput.title = 'CN 字号';
-    cnFsInput.addEventListener('change', () => {
-        lineData.cnFontSize = parseFloat(cnFsInput.value) || 3.0;
-        renderPIDSDisplay();
-        scheduleSave();
-    });
-
-    // 中文字号
-    const enFsInput = document.createElement('input');
-    enFsInput.type = 'number';
-    enFsInput.className = 'transfer-line-font-size';
-    enFsInput.value = lineData.enFontSize || 2.0;
-    enFsInput.step = '0.1';
-    enFsInput.min = '0.8';
-    enFsInput.max = '6';
-    enFsInput.title = 'EN 字号';
-    enFsInput.addEventListener('change', () => {
-        lineData.enFontSize = parseFloat(enFsInput.value) || 2.0;
-        renderPIDSDisplay();
-        scheduleSave();
-    });
-
     // 中文名输入
     const cnInput = document.createElement('input');
     cnInput.type = 'text';
@@ -2597,8 +2632,6 @@ function createTransferLineRow(station, lineData, index) {
     });
 
     row.appendChild(colorWrapper);
-    row.appendChild(cnFsInput);
-    row.appendChild(enFsInput);
     row.appendChild(cnInput);
     row.appendChild(enInput);
     row.appendChild(modeSelect);
@@ -2622,9 +2655,7 @@ function addTransferLine(station) {
         color: '#FF0000',
         nameCN: '新线路',
         nameEN: 'New Line',
-        textMode: 'light',
-        cnFontSize: 3.0,
-        enFontSize: 2.0
+        textMode: 'light'
     });
 
     // 自动设为换乘站
